@@ -1,0 +1,4 @@
+google-genai
+PySide6
+
+https://aistudio.google.com/api-keys

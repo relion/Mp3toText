@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mp3toText – תיעוד</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f7f8fa; --surface: #ffffff; --text: #1f2430; --muted: #5d6576;
+  --border: #e1e4ea; --accent: #2f6fd1; --accent-soft: #e8f0fc;
+  --code-bg: #f1f3f6; --th-bg: #f3f5f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171c; --surface: #1c2027; --text: #e4e7ec; --muted: #9aa3b2;
+    --border: #2d333d; --accent: #6ea0ec; --accent-soft: #1f2b3d;
+    --code-bg: #242a33; --th-bg: #232832;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171c; --surface: #1c2027; --text: #e4e7ec; --muted: #9aa3b2;
+  --border: #2d333d; --accent: #6ea0ec; --accent-soft: #1f2b3d;
+  --code-bg: #242a33; --th-bg: #232832;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.7 "Heebo", "Segoe UI", Arial, sans-serif;
+}
+.layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; }
+nav.toc {
+  position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+  padding: 28px 20px; border-inline-end: 1px solid var(--border);
+}
+nav.toc .brand { font-weight: 700; font-size: 18px; margin-bottom: 14px; }
+nav.toc ul { list-style: none; margin: 0; padding: 0; }
+nav.toc ul ul { padding-inline-start: 14px; font-size: 14px; }
+nav.toc a { display: block; padding: 3px 8px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+nav.toc a:hover, nav.toc a.active { background: var(--accent-soft); color: var(--accent); }
+main { padding: 32px 48px 80px; min-width: 0; }
+h1 { font-size: 32px; margin: 0 0 8px; }
+h2 { font-size: 24px; margin-top: 48px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+h3 { font-size: 19px; margin-top: 32px; }
+a { color: var(--accent); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 32px 0; }
+code {
+  font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.9em;
+  background: var(--code-bg); padding: 1px 5px; border-radius: 4px; direction: ltr; unicode-bidi: isolate;
+}
+pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; direction: ltr; text-align: left; }
+pre code { background: none; padding: 0; }
+.table-wrap { overflow-x: auto; margin: 16px 0; }
+table { border-collapse: collapse; width: 100%; background: var(--surface); font-size: 15px; }
+th, td { border: 1px solid var(--border); padding: 7px 12px; text-align: start; vertical-align: top; }
+th { background: var(--th-bg); font-weight: 500; }
+img { max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 4px 18px rgba(0,0,0,.08); }
+.diagram {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin: 18px 0; overflow-x: auto;
+}
+/* labels carry their own RTL isolates; keep the diagram base LTR like GitHub */
+pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-align: center; }
+.theme-toggle {
+  margin-top: 18px; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+  background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+}
+@media (max-width: 860px) {
+  .layout { display: block; }
+  nav.toc { position: static; height: auto; border: 0; border-bottom: 1px solid var(--border); padding: 16px; }
+  nav.toc ul ul { display: none; }
+  main { padding: 20px 16px 60px; }
+  h1 { font-size: 26px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <div class="brand">🎵 Mp3toText</div>
+    <div class="toc">
+<ul>
+<li><a href="#1-התקנה">1. התקנה</a></li>
+<li><a href="#2-הפעלה-ושימוש">2. הפעלה ושימוש</a><ul>
+<li><a href="#הפעלה">הפעלה</a></li>
+<li><a href="#מבנה-החלון">מבנה החלון</a></li>
+<li><a href="#שלבי-עבודה">שלבי עבודה</a></li>
+<li><a href="#טוקנים-ועלות">טוקנים ועלות</a></li>
+</ul>
+</li>
+<li><a href="#3-קובץ-ההגדרות-configjson">3. קובץ ההגדרות <bdi dir="ltr">config.json</bdi></a></li>
+<li><a href="#4-מבנה-הפרויקט">4. מבנה הפרויקט</a></li>
+<li><a href="#5-תיאור-הקוד">5. תיאור הקוד</a><ul>
+<li><a href="#51-קבועים">5.1 קבועים</a></li>
+<li><a href="#52-פונקציות-עזר">5.2 פונקציות עזר</a></li>
+<li><a href="#53-המחלקה-transcribeworkerqthread">5.3 המחלקה <bdi dir="ltr">TranscribeWorker(QThread)</bdi></a></li>
+<li><a href="#54-המחלקה-droplabelqlabel">5.4 המחלקה <bdi dir="ltr">DropLabel(QLabel)</bdi></a></li>
+<li><a href="#55-המחלקה-mainwindowqmainwindow">5.5 המחלקה <bdi dir="ltr">MainWindow(QMainWindow)</bdi></a></li>
+<li><a href="#56-main">5.6 <bdi dir="ltr">main()</bdi></a></li>
+</ul>
+</li>
+<li><a href="#6-תרשימי-זרימה">6. תרשימי זרימה</a><ul>
+<li><a href="#61-זרימת-המשתמש">6.1 זרימת המשתמש</a></li>
+<li><a href="#62-תהליך-ההמרה-threads-ו-api">6.2 תהליך ההמרה (<bdi dir="ltr">Threads</bdi> ו-<bdi dir="ltr">API</bdi>)</a></li>
+<li><a href="#63-עיבוד-כתוביות-ושמירת-srt">6.3 עיבוד כתוביות ושמירת <bdi dir="ltr">SRT</bdi></a></li>
+<li><a href="#64-חישוב-עלות-וסהכ-מצטבר">6.4 חישוב עלות וסה״כ מצטבר</a></li>
+</ul>
+</li>
+<li><a href="#7-החלטות-תכנון">7. החלטות תכנון</a><ul>
+<li><a href="#71-שם-קובץ-בעברית">7.1 שם קובץ בעברית</a></li>
+<li><a href="#72-qt-במקום-tkinter">7.2 <bdi dir="ltr">Qt</bdi> במקום <bdi dir="ltr">Tkinter</bdi></a></li>
+<li><a href="#73-בידוד-כיוון-בתוויות-העלות">7.3 בידוד כיוון בתוויות העלות</a></li>
+<li><a href="#74-כיבוי-חשיבה">7.4 כיבוי "חשיבה"</a></li>
+<li><a href="#75-כתוביות-כ-json-מובנה">7.5 כתוביות כ-<bdi dir="ltr">JSON</bdi> מובנה</a></li>
+<li><a href="#76-הקדמת-כתוביות">7.6 הקדמת כתוביות</a></li>
+<li><a href="#77-srt-עם-bom">7.7 <bdi dir="ltr">SRT</bdi> עם <bdi dir="ltr">BOM</bdi></a></li>
+<li><a href="#78-מחיקת-הקובץ-מהשרת">7.8 מחיקת הקובץ מהשרת</a></li>
+</ul>
+</li>
+<li><a href="#8-פתרון-תקלות">8. פתרון תקלות</a></li>
+</ul>
+</div>
+
+    <button class="theme-toggle" id="themeToggle" type="button">מצב בהיר / כהה</button>
+  </nav>
+  <main>
+<h1 id="mp3totext-תיעוד-הפרויקט">Mp3toText – תיעוד הפרויקט</h1>
+<p>אפליקציית דסקטופ ל-Windows שממירה קובצי אודיו (MP3 ועוד) לטקסט באמצעות Gemini API של גוגל. אפשר גם ליצור ממנה קובץ כתוביות SRT עם חותמות זמן. הממשק בעברית, מימין לשמאל, עם תמיכה מלאה בטקסט דו-כיווני (עברית ואנגלית באותו מסמך).</p>
+<hr />
+<h2 id="1-התקנה">1. התקנה</h2>
+<p><strong>דרישות:</strong></p>
+<ul>
+<li>Windows 10 ומעלה</li>
+<li>Python 3.10 ומעלה</li>
+<li>מפתח Gemini API. הדרך הפשוטה להשיג אותו: https://aistudio.google.com/apikey ← <strong>Create API key</strong></li>
+</ul>
+<p><strong>התקנת הספריות</strong> (מתוך תיקיית הפרויקט):</p>
+<pre><code class="language-bash">pip install -r requirements.txt
+</code></pre>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>ספרייה</th>
+<th>תפקיד</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PySide6</code></td>
+<td>ממשק המשתמש (Qt), כולל גרירת קבצים ותמיכה בעברית מימין לשמאל</td>
+</tr>
+<tr>
+<td><code>google-genai</code></td>
+<td>ה-SDK הרשמי של גוגל לתקשורת עם Gemini</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="2-הפעלה-ושימוש">2. הפעלה ושימוש</h2>
+<h3 id="הפעלה">הפעלה</h3>
+<ul>
+<li>לחיצה כפולה על <code>run.bat</code>. הקובץ מפעיל את <code>app.py</code> עם <code>pythonw</code>, כך שלא נפתח חלון שורת פקודה.</li>
+<li>או משורת הפקודה:</li>
+</ul>
+<pre><code class="language-bash">python app.py
+</code></pre>
+<h3 id="מבנה-החלון">מבנה החלון</h3>
+<p><img alt="החלון הראשי של Mp3toText" src="images/main-window.png" /></p>
+<p><strong>סרגל עליון (מימין לשמאל):</strong> המר לטקסט · שפה · צור גם כתוביות (SRT) · סה״כ טוקנים ועלות · ↺ איפוס · 💳 חיוב · ⚙ מפתח API<br />
+<strong>באמצע:</strong> אזור הגרירה, ומתחתיו תיבת הטקסט (פסקה בעברית מימין לשמאל, פסקה באנגלית משמאל לימין).<br />
+<strong>סרגל תחתון (מימין לשמאל):</strong> העתק הכל · שמור כקובץ · הקדמה · שמור כ-SRT · נקה · עלות הפעולה האחרונה · סטטוס</p>
+<h3 id="שלבי-עבודה">שלבי עבודה</h3>
+<ol>
+<li><strong>מפתח API (פעם אחת):</strong> לוחצים <strong>⚙ מפתח API</strong> ומדביקים את המפתח. הוא נשמר ב-<code>config.json</code>. אפשר במקום זה להגדיר משתנה סביבה <code>GEMINI_API_KEY</code>. אין לך מפתח? בחלון המפתח יש כפתור <strong>🔑 קבלת מפתח ב-Google AI Studio</strong> שפותח את https://aistudio.google.com/api-keys.</li>
+<li><strong>טעינת קובץ:</strong> גוררים קובץ אודיו לחלון (לאזור הגרירה או לכל מקום בחלון), או לוחצים על אזור הגרירה ובוחרים קובץ. נתמכים: <code>mp3</code>, <code>wav</code>, <code>m4a</code>, <code>ogg</code>, <code>flac</code>, <code>aac</code>.</li>
+<li><strong>שפה:</strong> בוחרים את שפת הדיבור באודיו (עברית / English / Română). המודל מתמלל באותה שפה ולא מתרגם.</li>
+<li><strong>כתוביות (לא חובה):</strong> מסמנים <strong>צור גם כתוביות (SRT)</strong> אם רוצים גם חותמות זמן.</li>
+<li><strong>המרה:</strong> לוחצים <strong>▶ המר לטקסט</strong>. פס ההתקדמות פועל, והממשק נשאר זמין בזמן ההמרה.</li>
+<li><strong>שימוש בתוצאה:</strong>
+   - אפשר לערוך את הטקסט ישירות בתיבה.
+   - <strong>📋 העתק הכל</strong> מעתיק את כל הטקסט ללוח.
+   - <strong>💾 שמור כקובץ</strong> שומר קובץ <code>.txt</code>. חלון השמירה נפתח בתיקייה של קובץ האודיו, עם אותו שם בסיס.
+   - <strong>🎬 שמור כ-SRT</strong> (זמין רק אחרי המרה עם כתוביות) שומר קובץ <code>.srt</code> באותו אופן.
+   - <strong>הקדמה (ms):</strong> מקדים את זמן ההופעה של כל כתובית, כי חותמות הזמן של Gemini נוטות לאחר מעט. ברירת המחדל היא 200ms. אם הכתוביות עדיין מאחרות, מגדילים את הערך.
+   - <strong>נקה</strong> מוחק את הטקסט ואת הכתוביות.</li>
+</ol>
+<h3 id="טוקנים-ועלות">טוקנים ועלות</h3>
+<ul>
+<li><strong>למעלה:</strong> הסך הכולל מכל ההמרות (טוקנים, דולרים ושקלים). הסכום נשמר ב-<code>config.json</code>, והכפתור <strong>↺</strong> מאפס אותו.</li>
+<li><strong>💳 חיוב:</strong> פותח בדפדפן את <a href="https://console.cloud.google.com/billing">דף החיוב של Google Cloud</a>. שם רואים את החיוב בפועל ואת אמצעי התשלום, ואפשר לקבוע תקציב והתראות. הסכום שמוצג באפליקציה הוא הערכה בלבד.</li>
+<li><strong>למטה:</strong> העלות של ההמרה האחרונה. כשמרחפים מעליה מוצג פירוט: אודיו נכנס, טקסט נכנס ופלט.</li>
+<li>המחיר מחושב לפי המחירון של שכבה בתשלום. <strong>בשכבה החינמית אין חיוב בפועל.</strong></li>
+</ul>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>סוג טוקן</th>
+<th>מחיר ל-1M טוקנים (<code>gemini-2.5-flash</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>אודיו נכנס</td>
+<td>$1.00</td>
+</tr>
+<tr>
+<td>טקסט נכנס (ההנחיה)</td>
+<td>$0.30</td>
+</tr>
+<tr>
+<td>פלט (התמלול)</td>
+<td>$2.50</td>
+</tr>
+</tbody>
+</table></div>
+<p>להערכה: דקת אודיו היא כ-1,900 טוקנים, כלומר שעת תמלול עולה כ-20 סנט.</p>
+<hr />
+<h2 id="3-קובץ-ההגדרות-configjson">3. קובץ ההגדרות config.json</h2>
+<p>הקובץ נוצר אוטומטית ליד <code>app.py</code> ומתעדכן מתוך הממשק. הוא מופיע ב-<code>.gitignore</code> כי הוא מכיל את המפתח.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>מפתח</th>
+<th>ברירת מחדל</th>
+<th>משמעות</th>
+<th>נקבע מ-</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api_key</code></td>
+<td>–</td>
+<td>מפתח Gemini</td>
+<td>כפתור ⚙</td>
+</tr>
+<tr>
+<td><code>lang</code></td>
+<td><code>"he"</code></td>
+<td>שפת הדיבור: <code>he</code> / <code>en</code> / <code>ro</code></td>
+<td>תיבת השפה</td>
+</tr>
+<tr>
+<td><code>srt</code></td>
+<td><code>false</code></td>
+<td>האם ליצור כתוביות</td>
+<td>תיבת הסימון</td>
+</tr>
+<tr>
+<td><code>srt_lead_in_ms</code></td>
+<td><code>200</code></td>
+<td>הקדמת הכתוביות במילישניות</td>
+<td>שדה "הקדמה"</td>
+</tr>
+<tr>
+<td><code>totals</code></td>
+<td><code>{tokens, usd, runs}</code></td>
+<td>הסך המצטבר</td>
+<td>אוטומטי / ↺</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td><code>"gemini-2.5-flash"</code></td>
+<td>שם המודל</td>
+<td>עריכה ידנית</td>
+</tr>
+<tr>
+<td><code>usd_to_ils</code></td>
+<td><code>3.7</code></td>
+<td>שער הדולר לשקל</td>
+<td>עריכה ידנית</td>
+</tr>
+<tr>
+<td><code>prices</code></td>
+<td>–</td>
+<td>דריסה או הוספה של מחירים למודל, לדוגמה <code>{"gemini-2.5-pro": {"audio_in": 1.25, "text_in": 1.25, "out": 10}}</code></td>
+<td>עריכה ידנית</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="4-מבנה-הפרויקט">4. מבנה הפרויקט</h2>
+<pre><code>Mp3toText/
+├── app.py              # כל קוד האפליקציה (קובץ יחיד)
+├── run.bat             # הפעלה בלחיצה כפולה (pythonw, בלי חלון קונסולה)
+├── requirements.txt    # PySide6, google-genai
+├── config.json         # הגדרות משתמש + מפתח (לא ב-git)
+├── README.md           # תקציר והוראות מהירות
+└── docs/
+    └── DOCUMENTATION.md  # המסמך הזה
+</code></pre>
+<hr />
+<h2 id="5-תיאור-הקוד">5. תיאור הקוד</h2>
+<p>כל הקוד נמצא בקובץ <a href="../app.py"><code>app.py</code></a> ובנוי בשלוש שכבות:</p>
+<div class="diagram"><pre class="mermaid">flowchart TB
+    subgraph UI[&quot;⁧שכבת ממשק – Thread ראשי⁩&quot;]
+        MW[&quot;MainWindow&quot;]
+        DL[&quot;DropLabel&quot;]
+    end
+    subgraph BG[&quot;⁧שכבת עבודה – Thread רקע⁩&quot;]
+        TW[&quot;TranscribeWorker - QThread&quot;]
+    end
+    subgraph PURE[&quot;⁧פונקציות עזר טהורות⁩&quot;]
+        CFG[&quot;load_config / save_config&quot;]
+        USE[&quot;extract_usage / usage_cost&quot;]
+        SRT[&quot;parse_segments / segments_to_srt&quot;]
+    end
+    API[(&quot;Gemini API&quot;)]
+    FILE[(&quot;config.json&quot;)]
+
+    DL -- &quot;file_dropped / clicked&quot; --&gt; MW
+    MW -- &quot;start&quot; --&gt; TW
+    TW -- &quot;finished_ok / failed&quot; --&gt; MW
+    TW &lt;--&gt; API
+    TW --&gt; SRT
+    TW --&gt; USE
+    MW --&gt; CFG
+    CFG &lt;--&gt; FILE
+    MW --&gt; SRT
+</pre></div>
+<h3 id="51-קבועים">5.1 קבועים</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>קבוע</th>
+<th>תיאור</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CONFIG_PATH</code></td>
+<td>נתיב <code>config.json</code>, תמיד ליד <code>app.py</code></td>
+</tr>
+<tr>
+<td><code>DEFAULT_MODEL</code></td>
+<td><code>gemini-2.5-flash</code></td>
+</tr>
+<tr>
+<td><code>AUDIO_EXTS</code></td>
+<td>מיפוי סיומת קובץ ← MIME type. משמש גם לבדיקה שהקובץ נתמך</td>
+</tr>
+<tr>
+<td><code>LANGUAGES</code></td>
+<td>קוד שפה ← (תווית בממשק, שם השפה באנגלית להנחיה)</td>
+</tr>
+<tr>
+<td><code>PROMPT</code></td>
+<td>ההנחיה לתמלול טקסט רגיל</td>
+</tr>
+<tr>
+<td><code>SRT_PROMPT</code> + <code>SRT_SCHEMA</code></td>
+<td>ההנחיה וסכמת ה-JSON לתמלול עם חותמות זמן. המודל מחזיר מערך של <code>{start, end, text}</code></td>
+</tr>
+<tr>
+<td><code>MIN_SEG_SECONDS</code> / <code>DEFAULT_SEG_SECONDS</code></td>
+<td>אורך מינימלי (0.5 שנ׳) ואורך ברירת מחדל (2 שנ׳) לכתובית</td>
+</tr>
+<tr>
+<td><code>DEFAULT_LEAD_IN_MS</code></td>
+<td>הקדמת כתוביות ברירת מחדל (200ms)</td>
+</tr>
+<tr>
+<td><code>PRICES</code> / <code>DEFAULT_USD_TO_ILS</code></td>
+<td>מחירון ושער ברירת מחדל</td>
+</tr>
+<tr>
+<td><code>DROP_IDLE</code> / <code>DROP_HOVER</code></td>
+<td>עיצוב אזור הגרירה במצב רגיל ובזמן גרירה</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="52-פונקציות-עזר">5.2 פונקציות עזר</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>פונקציה</th>
+<th>תפקיד</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_config()</code> / <code>save_config(cfg)</code></td>
+<td>קריאה וכתיבה של <code>config.json</code> ב-UTF-8. קובץ פגום נקרא כהגדרות ריקות</td>
+</tr>
+<tr>
+<td><code>clean_key(key)</code></td>
+<td>מסירה מהמפתח תווים שאינם ASCII ורווחים, כמו סימני כיוון נסתרים שנדבקים בהעתקה</td>
+</tr>
+<tr>
+<td><code>lang_instruction(lang)</code></td>
+<td>בונה את ההוראה "האודיו בשפה X, תמלל ב-X ואל תתרגם"</td>
+</tr>
+<tr>
+<td><code>extract_usage(resp)</code></td>
+<td>מחלצת מ-<code>usage_metadata</code> את מספרי הטוקנים: אודיו נכנס, טקסט נכנס ופלט (כולל טוקני "חשיבה")</td>
+</tr>
+<tr>
+<td><code>usage_cost(usage, prices)</code></td>
+<td>מחשבת עלות בדולרים, או <code>None</code> אם אין מחיר למודל</td>
+</tr>
+<tr>
+<td><code>parse_timestamp(value)</code></td>
+<td>ממירה <code>MM:SS.mmm</code>, <code>HH:MM:SS,mmm</code> או מספר לשניות</td>
+</tr>
+<tr>
+<td><code>parse_segments(raw)</code></td>
+<td>ממירה את תשובת ה-JSON לרשימת <code>(start, end, text)</code> ממוינת ותקינה. ראו <a href="#63-עיבוד-כתוביות-ושמירת-srt">תרשים 6.3</a></td>
+</tr>
+<tr>
+<td><code>format_srt_time(seconds)</code></td>
+<td>שניות ← <code>HH:MM:SS,mmm</code></td>
+</tr>
+<tr>
+<td><code>apply_lead_in(segments, lead_in)</code></td>
+<td>מקדימה את זמן ההתחלה של כל כתובית בלי לרדת מתחת ל-0 ובלי חפיפה עם הכתובית הקודמת. זמני הסיום לא משתנים</td>
+</tr>
+<tr>
+<td><code>segments_to_srt(segments, lead_in)</code></td>
+<td>בונה את טקסט קובץ ה-SRT</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="53-המחלקה-transcribeworkerqthread">5.3 המחלקה <code>TranscribeWorker(QThread)</code></h3>
+<p>מבצעת את כל התקשורת מול Gemini ב-thread נפרד, כדי שהממשק לא ייתקע בזמן ההמרה.</p>
+<ul>
+<li><strong>קלט:</strong> מפתח, שם מודל, נתיב קובץ, האם לייצר SRT, שפה.</li>
+<li><strong>אותות (Signals):</strong></li>
+<li><code>finished_ok(text, usage, segments)</code>: בהצלחה. <code>segments</code> ריק אם לא התבקשו כתוביות.</li>
+<li><code>failed(message)</code>: בשגיאה.</li>
+<li><strong><code>run()</code>:</strong>
+  1. יוצרת <code>genai.Client</code>.
+  2. מעלה את הקובץ ל-Files API כזרם בייטים עם שם ASCII קבוע (<code>audio.mp3</code>). ראו <a href="#71-שם-קובץ-בעברית">7.1</a>.
+  3. בונה <code>GenerateContentConfig</code>: <code>temperature=0</code> ותקרת פלט של 65,536 טוקנים. במצב SRT מוגדרים גם <code>response_mime_type=application/json</code> ו-<code>response_schema</code>. במודלי flash מכובה ה"חשיבה" (<code>thinking_budget=0</code>).
+  4. קוראת ל-<code>generate_content</code> עם ההנחיה והקובץ.
+  5. מוחקת את הקובץ מהשרת (בבלוק <code>finally</code>, כך שזה קורה גם אם הייתה שגיאה).
+  6. במצב SRT מפענחת את הכתוביות ובונה מהן את הטקסט להצגה.
+  7. משדרת <code>finished_ok</code> או <code>failed</code>.</li>
+</ul>
+<h3 id="54-המחלקה-droplabelqlabel">5.4 המחלקה <code>DropLabel(QLabel)</code></h3>
+<p>אזור הגרירה. מקבל קבצים בגרירה (<code>dragEnterEvent</code> / <code>dropEvent</code>), משנה צבע בזמן ריחוף ומשדר:</p>
+<ul>
+<li><code>file_dropped(path)</code>: כשנגרר קובץ.</li>
+<li><code>clicked()</code>: בלחיצה, ואז נפתח חלון בחירת קובץ.</li>
+</ul>
+<h3 id="55-המחלקה-mainwindowqmainwindow">5.5 המחלקה <code>MainWindow(QMainWindow)</code></h3>
+<p>החלון הראשי. מחזיקה את ההגדרות (<code>self.cfg</code>), את הקובץ הנוכחי (<code>self.file_path</code>), את ה-worker הפעיל (<code>self.worker</code>) ואת הכתוביות האחרונות (<code>self.segments</code>).</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>קבוצה</th>
+<th>מתודות</th>
+<th>תיאור</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>בנייה</td>
+<td><code>__init__</code></td>
+<td>בניית הממשק: סרגל עליון, אזור גרירה, תיבת טקסט, סרגל תחתון</td>
+</tr>
+<tr>
+<td>הגדרות</td>
+<td><code>on_srt_toggled</code>, <code>on_lang_changed</code>, <code>on_lead_changed</code></td>
+<td>כל שינוי בממשק נשמר מיד ל-<code>config.json</code></td>
+</tr>
+<tr>
+<td>מפתח</td>
+<td><code>get_api_key</code>, <code>ask_api_key</code></td>
+<td>המפתח נלקח מ-<code>config.json</code>, ואם אין שם, מ-<code>GEMINI_API_KEY</code></td>
+</tr>
+<tr>
+<td>טעינה</td>
+<td><code>browse</code>, <code>load_file</code>, <code>dragEnterEvent</code>, <code>dropEvent</code></td>
+<td>בדיקת סיומת, עדכון אזור הגרירה, איפוס כתוביות ישנות</td>
+</tr>
+<tr>
+<td>המרה</td>
+<td><code>convert</code>, <code>_finish</code>, <code>on_done</code>, <code>on_error</code></td>
+<td>הפעלת ה-worker וטיפול בתוצאה. <code>self.worker</code> משמש גם כ"נעילה" שמונעת המרה כפולה</td>
+</tr>
+<tr>
+<td>עלות</td>
+<td><code>prices_for</code>, <code>format_usage</code>, <code>update_total_label</code>, <code>reset_totals</code></td>
+<td>חישוב ותצוגה של טוקנים ועלות</td>
+</tr>
+<tr>
+<td>פלט</td>
+<td><code>copy_all</code>, <code>save_text</code>, <code>save_srt</code>, <code>clear_output</code>, <code>set_segments</code></td>
+<td>העתקה, שמירה וניקוי</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="56-main">5.6 <code>main()</code></h3>
+<p>יוצרת <code>QApplication</code>, מגדירה כיוון RTL לכל האפליקציה (<code>Qt.RightToLeft</code>) וגופן Segoe UI, ומציגה את החלון.</p>
+<hr />
+<h2 id="6-תרשימי-זרימה">6. תרשימי זרימה</h2>
+<h3 id="61-זרימת-המשתמש">6.1 זרימת המשתמש</h3>
+<div class="diagram"><pre class="mermaid">flowchart TD
+    A([&quot;⁧הפעלת run.bat⁩&quot;]) --&gt; B{&quot;⁧יש מפתח API?⁩&quot;}
+    B -- &quot;⁧לא⁩&quot; --&gt; C[&quot;⁧הודעה בשורת הסטטוס:⁩&lt;br/&gt;⁧לחץ על ⚙ מפתח API⁩&quot;]
+    C --&gt; D[&quot;⁧הזנת מפתח ← נשמר ב-config.json⁩&quot;]
+    B -- &quot;⁧כן⁩&quot; --&gt; E
+    D --&gt; E[&quot;⁧גרירת קובץ / לחיצה על אזור הגרירה⁩&quot;]
+    E --&gt; F{&quot;⁧סיומת נתמכת?⁩&quot;}
+    F -- &quot;⁧לא⁩&quot; --&gt; G[&quot;⁧אזהרה: קובץ לא נתמך⁩&quot;] --&gt; E
+    F -- &quot;⁧כן⁩&quot; --&gt; H[&quot;⁧הקובץ נטען⁩&lt;br/&gt;⁧כפתור ההמרה מופעל⁩&quot;]
+    H --&gt; I[&quot;⁧בחירת שפה⁩&lt;br/&gt;⁧סימון SRT – לא חובה⁩&quot;]
+    I --&gt; J[&quot;⁧▶ המר לטקסט⁩&quot;]
+    J --&gt; K{&quot;⁧הצלחה?⁩&quot;}
+    K -- &quot;⁧לא⁩&quot; --&gt; L[&quot;⁧חלון שגיאה⁩&quot;] --&gt; J
+    K -- &quot;⁧כן⁩&quot; --&gt; M[&quot;⁧הטקסט מוצג⁩&lt;br/&gt;⁧עדכון טוקנים ועלות⁩&quot;]
+    M --&gt; N[&quot;⁧העתק הכל⁩&quot;]
+    M --&gt; O[&quot;⁧שמור כ-TXT⁩&quot;]
+    M --&gt; P{&quot;⁧התבקשו כתוביות?⁩&quot;}
+    P -- &quot;⁧כן⁩&quot; --&gt; Q[&quot;⁧כיוון הקדמה ← שמור כ-SRT⁩&quot;]
+</pre></div>
+<h3 id="62-תהליך-ההמרה-threads-ו-api">6.2 תהליך ההמרה (Threads ו-API)</h3>
+<div class="diagram"><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor U as ⁧משתמש⁩
+    participant MW as MainWindow&lt;br/&gt;⁧thread ראשי⁩
+    participant TW as TranscribeWorker&lt;br/&gt;⁧thread רקע⁩
+    participant G as Gemini API
+
+    U-&gt;&gt;MW: ⁧לחיצה על ▶ המר לטקסט⁩
+    MW-&gt;&gt;MW: ⁧בדיקת מפתח, נעילת כפתור, הצגת פס התקדמות⁩
+    MW-&gt;&gt;TW: start()
+    TW-&gt;&gt;G: ⁧files.upload – זרם בייטים, שם audio.mp3⁩
+    G--&gt;&gt;TW: uploaded file handle
+    TW-&gt;&gt;G: generate_content(prompt + file, config)
+    G--&gt;&gt;TW: ⁧טקסט או JSON + usage_metadata⁩
+    TW-&gt;&gt;G: ⁧files.delete – בתוך finally⁩
+    alt ⁧מצב SRT⁩
+        TW-&gt;&gt;TW: ⁧parse_segments ← בניית טקסט מהכתוביות⁩
+    end
+    alt ⁧הצלחה⁩
+        TW--&gt;&gt;MW: finished_ok(text, usage, segments)
+        MW-&gt;&gt;MW: ⁧הצגת טקסט, חישוב עלות, עדכון totals ב-config.json⁩
+    else ⁧שגיאה⁩
+        TW--&gt;&gt;MW: failed(message)
+        MW-&gt;&gt;U: ⁧חלון שגיאה⁩
+    end
+    MW-&gt;&gt;MW: ⁧_finish – שחרור הכפתור והסתרת פס ההתקדמות⁩
+</pre></div>
+<h3 id="63-עיבוד-כתוביות-ושמירת-srt">6.3 עיבוד כתוביות ושמירת SRT</h3>
+<div class="diagram"><pre class="mermaid">flowchart TD
+    A[&quot;⁧תשובת JSON מהמודל⁩&quot;] --&gt; B{&quot;⁧json.loads הצליח?⁩&quot;}
+    B -- &quot;⁧כן⁩&quot; --&gt; D[&quot;⁧רשימת אובייקטים⁩&quot;]
+    B -- &quot;⁧לא – JSON קטוע⁩&quot; --&gt; C[&quot;⁧חילוץ כל אובייקט {...} שלם⁩&lt;br/&gt;⁧באמצעות regex⁩&quot;] --&gt; D
+    D --&gt; E[&quot;⁧לכל אובייקט: ניקוי רווחים בטקסט,⁩&lt;br/&gt;⁧המרת start/end לשניות⁩&quot;]
+    E --&gt; F{&quot;⁧יש טקסט ו-start?⁩&quot;}
+    F -- &quot;⁧לא⁩&quot; --&gt; X[&quot;⁧דילוג⁩&quot;]
+    F -- &quot;⁧כן⁩&quot; --&gt; G[&quot;⁧מיון לפי זמן התחלה⁩&quot;]
+    G --&gt; H{&quot;⁧end חסר או ≤ start?⁩&quot;}
+    H -- &quot;⁧כן⁩&quot; --&gt; I[&quot;⁧end = start + 2 שנ׳⁩&quot;]
+    H -- &quot;⁧לא⁩&quot; --&gt; J
+    I --&gt; J{&quot;⁧end חופף לכתובית הבאה?⁩&quot;}
+    J -- &quot;⁧כן⁩&quot; --&gt; K[&quot;end = max(next_start, start + 0.5)&quot;]
+    J -- &quot;⁧לא⁩&quot; --&gt; L
+    K --&gt; L[&quot;⁧segments – שמורים בזיכרון⁩&quot;]
+    L --&gt; M[&quot;⁧לחיצה על 🎬 שמור כ-SRT⁩&quot;]
+    M --&gt; N[&quot;apply_lead_in:&lt;br/&gt;start = max(start − lead_in, prev_end, 0)&quot;]
+    N --&gt; O[&quot;⁧format_srt_time ← בלוקים ממוספרים⁩&quot;]
+    O --&gt; P[&quot;⁧כתיבה ב-UTF-8 עם BOM⁩&quot;]
+</pre></div>
+<h3 id="64-חישוב-עלות-וסהכ-מצטבר">6.4 חישוב עלות וסה״כ מצטבר</h3>
+<div class="diagram"><pre class="mermaid">flowchart LR
+    A[&quot;usage_metadata&quot;] --&gt; B[&quot;extract_usage&quot;]
+    B --&gt; C[&quot;⁧audio_in = טוקני AUDIO⁩&quot;]
+    B --&gt; D[&quot;text_in = prompt − audio&quot;]
+    B --&gt; E[&quot;out = candidates + thoughts&quot;]
+    C &amp; D &amp; E --&gt; F{&quot;⁧יש מחיר למודל?⁩&lt;br/&gt;PRICES + config.prices&quot;}
+    F -- &quot;⁧כן⁩&quot; --&gt; G[&quot;⁧usd = Σ טוקנים × מחיר / 1M⁩&quot;]
+    F -- &quot;⁧לא⁩&quot; --&gt; H[&quot;⁧רק טוקנים, בלי מחיר⁩&quot;]
+    G --&gt; I[&quot;₪ = usd × usd_to_ils&quot;]
+    I --&gt; J[&quot;⁧תווית: פעולה זו⁩&quot;]
+    H --&gt; J
+    G --&gt; K[&quot;totals += tokens, usd, runs&lt;br/&gt;save_config&quot;]
+    K --&gt; L[&quot;⁧תווית: סה״כ⁩&quot;]
+</pre></div>
+<hr />
+<h2 id="7-החלטות-תכנון">7. החלטות תכנון</h2>
+<h3 id="71-שם-קובץ-בעברית">7.1 שם קובץ בעברית</h3>
+<p>ה-SDK של Gemini שולח את שם הקובץ בכותרת HTTP, שבה מותרים רק תווי ASCII. קובץ בשם עברי נכשל בשגיאה <code>'ascii' codec can't encode</code>. <strong>הפתרון:</strong> הקובץ נפתח ונשלח כזרם בייטים עם <code>display_name</code> קבוע באנגלית (<code>audio.mp3</code>). הקובץ המקורי לא משתנה.</p>
+<h3 id="72-qt-במקום-tkinter">7.2 Qt במקום Tkinter</h3>
+<p>הגרסה הראשונה נכתבה ב-Tkinter. תיבת הטקסט שם מציגה כל שורה בכיוון בסיס משמאל לימין, ולכן סימני פיסוק הופיעו בצד הלא נכון וטקסט מעורב התבלבל. Qt (<code>QTextEdit</code>) מזהה את הכיוון של <strong>כל פסקה בנפרד</strong> לפי התו החזק הראשון: פסקה בעברית מוצגת מימין לשמאל, פסקה באנגלית משמאל לימין.</p>
+<h3 id="73-בידוד-כיוון-בתוויות-העלות">7.3 בידוד כיוון בתוויות העלות</h3>
+<p>בתוויות מימין לשמאל, צירוף כמו <code>$0.0053 ≈ ₪0.020</code> מתבלבל. החלק הכספי עטוף בתווי Unicode ‏<code>U+2066</code> (LRI) ו-<code>U+2069</code> (PDI), שמבודדים אותו ושומרים עליו משמאל לימין.</p>
+<h3 id="74-כיבוי-חשיבה">7.4 כיבוי "חשיבה"</h3>
+<p>בתמלול אין צורך ב"חשיבה" של המודל, וטוקני חשיבה מחויבים במחיר הפלט. במודלי flash מוגדר <code>thinking_budget=0</code>.</p>
+<h3 id="75-כתוביות-כ-json-מובנה">7.5 כתוביות כ-JSON מובנה</h3>
+<p>במקום לבקש מהמודל SRT כטקסט חופשי, מבקשים JSON לפי סכמה (<code>response_schema</code>). זה מאפשר בדיקה ותיקון של הזמנים: מיון, השלמת זמן סיום חסר ומניעת חפיפות. ב-JSON שנקטע (למשל בקובץ ארוך שהגיע לתקרת הפלט) נשמרים כל האובייקטים השלמים שהתקבלו.</p>
+<h3 id="76-הקדמת-כתוביות">7.6 הקדמת כתוביות</h3>
+<p>חותמות הזמן של Gemini נוטות לאחר במעט. ההקדמה מוחלת <strong>רק בשמירה</strong>, ולכן אפשר לשנות אותה ולשמור שוב בלי המרה נוספת.</p>
+<h3 id="77-srt-עם-bom">7.7 SRT עם BOM</h3>
+<p>קובץ ה-SRT נשמר ב-<code>utf-8-sig</code>, כלומר UTF-8 עם BOM, כדי שנגנים ועורכים ישנים יזהו את הקידוד ויציגו עברית נכון.</p>
+<h3 id="78-מחיקת-הקובץ-מהשרת">7.8 מחיקת הקובץ מהשרת</h3>
+<p>הקובץ שהועלה ל-Files API נמחק מיד בתום ההמרה, בבלוק <code>finally</code>, גם אם הייתה שגיאה. כך האודיו לא נשאר בשרתי גוגל לאחר הצורך.</p>
+<hr />
+<h2 id="8-פתרון-תקלות">8. פתרון תקלות</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>הודעה / תופעה</th>
+<th>סיבה</th>
+<th>פתרון</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>'ascii' codec can't encode characters</code></td>
+<td>שם קובץ בעברית בגרסה ישנה, או תו נסתר במפתח</td>
+<td>עדכון לגרסה הנוכחית (שתי הבעיות מטופלות)</td>
+</tr>
+<tr>
+<td><code>403 PERMISSION_DENIED ... SERVICE_DISABLED</code></td>
+<td>המפתח שייך לפרויקט Google Cloud שבו Gemini API לא מופעל (למשל מפתח של Translate)</td>
+<td>ליצור מפתח ב-https://aistudio.google.com/apikey</td>
+</tr>
+<tr>
+<td><code>API key not valid</code></td>
+<td>מפתח שגוי</td>
+<td>להזין מחדש דרך ⚙ מפתח API</td>
+</tr>
+<tr>
+<td><code>לא התקבל טקסט מהמודל</code></td>
+<td>המודל החזיר תשובה ריקה (קובץ שקט, חסימת תוכן)</td>
+<td>לבדוק את הקובץ ולנסות שוב</td>
+</tr>
+<tr>
+<td><code>לא ניתן היה לפענח כתוביות</code></td>
+<td>תשובת ה-JSON לא תקינה</td>
+<td>לנסות שוב. אם זה חוזר, להמיר בלי SRT</td>
+</tr>
+<tr>
+<td>הכתוביות מאחרות או מקדימות</td>
+<td>סטייה בחותמות הזמן של Gemini</td>
+<td>לשנות את ערך "הקדמה" ולשמור שוב (בלי המרה מחדש)</td>
+</tr>
+<tr>
+<td>תמלול קטוע בקבצים ארוכים מאוד</td>
+<td>הגעה לתקרת הפלט (65,536 טוקנים)</td>
+<td>לפצל את הקובץ לחלקים</td>
+</tr>
+<tr>
+<td>המחיר מוצג אבל לא חויבתי</td>
+<td>שימוש בשכבה החינמית</td>
+<td>זה תקין: המחיר הוא הערכה לפי שכבה בתשלום</td>
+</tr>
+</tbody>
+</table></div>
+  </main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+(function () {
+  const root = document.documentElement;
+  try { const t = localStorage.getItem("theme"); if (t) root.dataset.theme = t; } catch (e) {}
+  const isDark = () => root.dataset.theme ? root.dataset.theme === "dark"
+                                          : matchMedia("(prefers-color-scheme: dark)").matches;
+  const sources = [...document.querySelectorAll("pre.mermaid")].map(el => el.textContent);
+
+  async function draw() {
+    if (!window.mermaid) return;  // offline: diagrams stay as source text
+    mermaid.initialize({ startOnLoad: false, theme: isDark() ? "dark" : "default", securityLevel: "strict" });
+    document.querySelectorAll("pre.mermaid").forEach((el, i) => {
+      el.removeAttribute("data-processed"); el.textContent = sources[i];
+    });
+    await mermaid.run({ querySelector: "pre.mermaid" });
+  }
+  draw();
+
+  document.getElementById("themeToggle").addEventListener("click", () => {
+    root.dataset.theme = isDark() ? "light" : "dark";
+    try { localStorage.setItem("theme", root.dataset.theme); } catch (e) {}
+    draw();
+  });
+
+  // highlight the current section in the sidebar
+  const links = [...document.querySelectorAll("nav.toc a")];
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      links.forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + e.target.id));
+    });
+  }, { rootMargin: "0px 0px -70% 0px" });
+  document.querySelectorAll("main h2[id], main h3[id]").forEach(h => obs.observe(h));
+})();
+</script>
+</body>
+</html>
