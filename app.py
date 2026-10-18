@@ -38,6 +38,20 @@ def lang_instruction(lang):
             f"Never translate it into any other language. ")
 
 
+# Subtitles come back as JSON, where an ASCII " ends the text string: the model cut every
+# Hebrew abbreviation there (רמב"ם -> "...הרמב" + next subtitle "ם ...", likewise תנ"ך, י"ב).
+# Plain-text transcription has no JSON, so this is added to subtitle requests only.
+HEBREW_JSON_QUOTES = ("Write Hebrew abbreviations with the Hebrew gershayim ״ and geresh ׳ "
+                      "characters (e.g. רמב״ם, תנ״ך, ג׳), never with ASCII quote marks. ")
+
+
+def duration_instruction(seconds):
+    if not seconds:
+        return ""
+    m, s = divmod(int(round(seconds)), 60)
+    return f"The audio is {m}:{s:02d} (minutes:seconds) long; every timestamp must be within it. "
+
+
 PROMPT = (
     "Transcribe this audio file verbatim. "
     "Return only the transcription text, with paragraph breaks where natural. "
@@ -48,8 +62,9 @@ SRT_PROMPT = (
     "Transcribe this audio file verbatim, as subtitles. "
     "Split the speech into short subtitle segments (one or two short sentences, at most about "
     "80 characters each). For every segment give the exact time it is spoken in the audio: "
-    "'start' and 'end' in the format MM:SS.mmm (or HH:MM:SS.mmm for audio longer than an hour), "
-    "measured from the very beginning of the file. 'start' is the exact moment the first word "
+    "'start' and 'end' in the format MM:SS.mmm, with one colon and a dot before the milliseconds "
+    "(e.g. 00:07.400 is 7.4 seconds and 12:05.250 is 12 minutes 5.25 seconds; use HH:MM:SS.mmm "
+    "only for audio longer than an hour), measured from the very beginning of the file. 'start' is the exact moment the first word "
     "begins to be heard, not the end of the preceding pause. Segments must be in chronological "
     "order and must not overlap. Do not add commentary or describe sounds."
 )
@@ -147,27 +162,37 @@ def usage_cost(usage, prices):
     return sum(usage[k] * prices[k] for k in ("audio_in", "text_in", "out")) / 1_000_000
 
 
-def parse_timestamp(value):
-    """'MM:SS.mmm', 'HH:MM:SS,mmm', '12.5' or a number -> seconds (float), or None."""
+def parse_timestamp(value, three_part="hms"):
+    """'MM:SS.mmm', 'HH:MM:SS,mmm', '12.5' or a number -> seconds (float), or None.
+
+    A three-part value like '00:07:40' is ambiguous: H:M:S (7 min 40 s), or what Gemini
+    sometimes means, M:S:fraction (7.40 s). three_part="msf" picks the second reading.
+    """
     if isinstance(value, (int, float)):
         return float(value)
     s = str(value).strip().replace(",", ".")
     if not s:
         return None
+    parts = s.split(":")
     try:
+        if len(parts) == 3 and three_part == "msf":
+            frac = parts[2].split(".")[0]
+            return int(parts[0]) * 60 + float(parts[1]) + (int(frac) / 10 ** len(frac) if frac else 0.0)
         secs = 0.0
-        for part in s.split(":"):
+        for part in parts:
             secs = secs * 60 + float(part)
         return secs
     except ValueError:
         return None
 
 
-def parse_segments(raw):
+def parse_segments(raw, duration=None):
     """Gemini JSON reply -> sorted, sanitized list of (start, end, text) in seconds.
 
     Tolerates truncated JSON (long files hitting the output limit) by salvaging
-    the complete objects that were received.
+    the complete objects that were received. With the audio duration known,
+    three-part timestamps that would land far past the end of the file are re-read
+    as M:S:fraction (a 20-minute file once came back ending at "20:17:40").
     """
     try:
         items = json.loads(raw)
@@ -181,15 +206,23 @@ def parse_segments(raw):
     if isinstance(items, dict):
         items = items.get("segments", [])
 
-    segs = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        text = " ".join(str(it.get("text", "")).split())
-        start = parse_timestamp(it.get("start"))
-        if not text or start is None:
-            continue
-        segs.append([start, parse_timestamp(it.get("end")), text])
+    def build(three_part):
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            text = " ".join(str(it.get("text", "")).split())
+            start = parse_timestamp(it.get("start"), three_part)
+            if not text or start is None:
+                continue
+            out.append([start, parse_timestamp(it.get("end"), three_part), text])
+        return out
+
+    segs = build("hms")
+    if duration and segs and max(s[0] for s in segs) > duration * 1.1:
+        alt = build("msf")
+        if alt and max(s[0] for s in alt) <= duration * 1.1:
+            segs = alt
     segs.sort(key=lambda s: s[0])
 
     for i, seg in enumerate(segs):
@@ -199,6 +232,8 @@ def parse_segments(raw):
             end = seg[0] + DEFAULT_SEG_SECONDS
         if nxt is not None and end > nxt:  # no overlap with the next subtitle
             end = max(nxt, seg[0] + MIN_SEG_SECONDS)
+        if duration:
+            end = max(min(end, duration), seg[0] + MIN_SEG_SECONDS)
         seg[1] = end
     return [tuple(s) for s in segs]
 
@@ -297,10 +332,11 @@ class TranscribeWorker(QThread):
     failed = Signal(str)
     progress = Signal(str)
 
-    def __init__(self, key, model, path, want_srt=False, lang=DEFAULT_LANG):
+    def __init__(self, key, model, path, want_srt=False, lang=DEFAULT_LANG, duration=None):
         super().__init__()
         self.key, self.model, self.path, self.want_srt = key, model, path, want_srt
         self.lang = lang
+        self.duration = duration  # seconds, or None if the player hasn't read it yet
 
     def run(self):
         try:
@@ -322,7 +358,12 @@ class TranscribeWorker(QThread):
                 # transcription doesn't need "thinking", which is billed as output
                 gen_cfg.thinking_config = types.ThinkingConfig(thinking_budget=0)
             try:
-                prompt = lang_instruction(self.lang) + (SRT_PROMPT if self.want_srt else PROMPT)
+                if self.want_srt:
+                    prompt = (lang_instruction(self.lang)
+                              + (HEBREW_JSON_QUOTES if self.lang == "he" else "")
+                              + duration_instruction(self.duration) + SRT_PROMPT)
+                else:
+                    prompt = lang_instruction(self.lang) + PROMPT
                 resp = call_with_quota_retry(lambda: client.models.generate_content(
                     model=self.model, contents=[prompt, uploaded], config=gen_cfg), self.progress.emit)
             finally:
@@ -335,7 +376,7 @@ class TranscribeWorker(QThread):
                 raise RuntimeError("לא התקבל טקסט מהמודל.")
             segments = []
             if self.want_srt:
-                segments = parse_segments(text)
+                segments = parse_segments(text, self.duration)
                 if not segments:
                     raise RuntimeError("לא ניתן היה לפענח כתוביות מתשובת המודל.")
                 text = "\n".join(s[2] for s in segments)
@@ -872,7 +913,8 @@ class MainWindow(QMainWindow):
                 return
         self.pending_lang = self.lang_combo.currentData()
         self.worker = TranscribeWorker(self.get_api_key(), self.cfg.get("model", DEFAULT_MODEL),
-                                       self.file_path, self.srt_check.isChecked(), self.pending_lang)
+                                       self.file_path, self.srt_check.isChecked(), self.pending_lang,
+                                       self.audio_player.player.duration() / 1000 or None)
         self.worker.finished_ok.connect(self.on_done)
         self.worker.progress.connect(self.set_status)
         self._start("מעלה ומתמלל... (עשוי לקחת זמן בקבצים ארוכים)")
