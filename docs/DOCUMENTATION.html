@@ -177,7 +177,8 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <p><img alt="החלון הראשי של Mp3toText" src="images/main-window.png" /></p>
 <p><strong>סרגל עליון (מימין לשמאל):</strong> המר לטקסט · שפה · צור גם כתוביות (SRT) · סה״כ טוקנים ועלות · ↺ איפוס · 💳 חיוב · ⚙ מפתח API<br />
 <strong>באמצע:</strong> אזור הגרירה, מתחתיו נגן האודיו (▶/⏸ · ⏹ · ציר זמן · זמן נוכחי / אורך כולל), ומתחתיו תיבת הטקסט עם שתי לשוניות, <strong>מקור</strong> ו<strong>תרגום</strong> (פסקה בעברית מימין לשמאל, פסקה באנגלית משמאל לימין). בקצה השמאלי של שורת הלשוניות: <strong>תרגם ל:</strong> ו-<strong>🌐 תרגם</strong>.<br />
-<strong>סרגל תחתון (מימין לשמאל):</strong> העתק הכל · שמור כקובץ · הקדמה · שמור כ-SRT · RTL לנגנים · נקה · עלות הפעולה האחרונה · סטטוס</p>
+<strong>סרגל תחתון (מימין לשמאל):</strong> העתק הכל · שמור כקובץ · הקדמה · שמור כ-SRT · RTL לנגנים · נקה<br />
+<strong>שורת סטטוס (שורה דקה בתחתית החלון):</strong> מימין הודעת הסטטוס. משמאל עלות הפעולה האחרונה ופס ההתקדמות.</p>
 <h3 id="שלבי-עבודה">שלבי עבודה</h3>
 <ol>
 <li><strong>מפתח API (פעם אחת):</strong> לוחצים <strong>⚙ מפתח API</strong> ומדביקים את המפתח. הוא נשמר ב-<code>config.json</code>. אפשר במקום זה להגדיר משתנה סביבה <code>GEMINI_API_KEY</code>. אין לך מפתח? בחלון המפתח יש כפתור <strong>🔑 קבלת מפתח ב-Google AI Studio</strong> שפותח את https://aistudio.google.com/api-keys.</li>
@@ -212,7 +213,7 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <li><strong>💳 חיוב:</strong> פותח תפריט עם שני קישורים, שנפתחים בדפדפן:</li>
 <li><strong>חיוב – Google Cloud</strong> (<a href="https://console.cloud.google.com/billing">console.cloud.google.com/billing</a>): החיוב בפועל ואמצעי התשלום, ואפשר לקבוע שם תקציב והתראות. הסכום שמוצג באפליקציה הוא הערכה בלבד.</li>
 <li><strong>מעקב אחר ניצול המכסה</strong> (<a href="https://ai.dev/rate-limit">ai.dev/rate-limit</a>): כמה בקשות נוצלו מהמכסה לדקה וליום, ומתי היא מתאפסת. במסלול החינמי המכסה של <code>gemini-2.5-flash</code> היא 20 בקשות ביום.</li>
-<li><strong>למטה:</strong> העלות של ההמרה האחרונה. כשמרחפים מעליה מוצג פירוט: אודיו נכנס, טקסט נכנס ופלט.</li>
+<li><strong>בשורת הסטטוס:</strong> העלות של הפעולה האחרונה (תמלול או תרגום). כשמרחפים מעליה מוצג פירוט: אודיו נכנס, טקסט נכנס ופלט.</li>
 <li>המחיר מחושב לפי המחירון של שכבה בתשלום. <strong>בשכבה החינמית אין חיוב בפועל.</strong></li>
 </ul>
 <div class="table-wrap"><table>
@@ -557,7 +558,7 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <tr>
 <td>בנייה</td>
 <td><code>__init__</code></td>
-<td>בניית הממשק: סרגל עליון, אזור גרירה, נגן אודיו, תיבת טקסט, סרגל תחתון</td>
+<td>בניית הממשק: סרגל עליון, אזור גרירה, נגן אודיו, לשוניות הטקסט, סרגל תחתון, ושורת סטטוס (<code>statusBar()</code>) עם הודעת הסטטוס, עלות הפעולה ופס ההתקדמות</td>
 </tr>
 <tr>
 <td>הגדרות</td>
