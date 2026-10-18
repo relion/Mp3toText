@@ -571,7 +571,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(12, 12, 12, 2)  # the status line below supplies the bottom edge
         root.setSpacing(10)
 
         # --- top toolbar (layout is RTL, so first widget is on the right) ---
@@ -714,10 +714,15 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.rtl_check)
         bottom.addWidget(clear_btn)
         bottom.addStretch()
-        bottom.addWidget(self.op_label)
-        bottom.addWidget(self.status)
-        bottom.addWidget(self.progress)
         root.addLayout(bottom)
+
+        # --- status line: one thin row at the bottom of the window ---
+        bar = self.statusBar()
+        bar.setSizeGripEnabled(False)
+        bar.setContentsMargins(9, 0, 9, 0)  # line its text up with the buttons above
+        bar.addWidget(self.status, 1)
+        bar.addPermanentWidget(self.op_label)
+        bar.addPermanentWidget(self.progress)
 
         self.update_total_label()
         self.refresh_targets()
