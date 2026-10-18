@@ -4,14 +4,17 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit,
-    QMainWindow, QMessageBox, QProgressBar, QPushButton, QSpinBox, QTextEdit, QVBoxLayout, QWidget,
+    QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QSlider, QSpinBox, QStyle, QTabWidget, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 APP_DIR = Path(__file__).resolve().parent
@@ -26,6 +29,7 @@ LANGUAGES = {
     "ro": ("Română", "Romanian"),
 }
 DEFAULT_LANG = "he"
+RTL_LANGS = {"he"}
 
 
 def lang_instruction(lang):
@@ -63,6 +67,31 @@ SRT_SCHEMA = {
 }
 MIN_SEG_SECONDS = 0.5
 DEFAULT_SEG_SECONDS = 2.0
+
+# "Translate everything" matters: without it the model drops content it judges to be noise,
+# e.g. "1 2 3 שלום עולם." came back as just "Hello world." (reproduced 3/3 with gemini-2.5-flash).
+TRANSLATE_PROMPT = (
+    "Translate the following {src} transcript into {tgt}. Translate everything that is in it: "
+    "keep every number, count, name and repeated or filler word. Never omit, summarize or "
+    "'clean up' anything. Keep paragraph breaks. Return only the translation, without commentary."
+)
+TRANSLATE_SRT_PROMPT = (
+    "Translate these subtitles from {src} into {tgt}. The input is a JSON array of objects "
+    "with 'id' and 'text'. Return a JSON array with exactly the same ids, each with the "
+    "translated text. Translate everything in each subtitle: keep every number, count, name "
+    "and repeated or filler word, and never omit, summarize or 'clean up' anything. Use the "
+    "neighbouring subtitles as context, and never merge, split, skip or reorder items."
+)
+TRANSLATE_SRT_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {"id": {"type": "INTEGER"}, "text": {"type": "STRING"}},
+        "required": ["id", "text"],
+    },
+}
+SRT_TRANSLATE_BATCH = 100  # subtitles per request, so long files don't hit the output limit
+
 # Gemini timestamps run late; subtitles start this much earlier when saving (adjustable in the UI).
 DEFAULT_LEAD_IN_MS = 200
 
@@ -73,6 +102,7 @@ PRICES = {
 }
 DEFAULT_USD_TO_ILS = 3.7  # approximate; override via "usd_to_ils" in config.json
 BILLING_URL = "https://console.cloud.google.com/billing"
+RATE_LIMIT_URL = "https://ai.dev/rate-limit"
 API_KEYS_URL = "https://aistudio.google.com/api-keys"
 
 DROP_IDLE = "QLabel#drop { background:#eef3fb; color:#3a4a63; border:2px dashed #9fb3d1; border-radius:8px; }"
@@ -196,17 +226,76 @@ def apply_lead_in(segments, lead_in):
     return out
 
 
-def segments_to_srt(segments, lead_in=0.0):
+def rtl_line(text):
+    """Force right-to-left display of a subtitle line in players that default to LTR.
+
+    RLM at both ends makes the first strong character RTL and keeps edge punctuation
+    on the correct side; the RLE..PDF embedding keeps mixed Hebrew/English word order.
+    """
+    return f"‏‫{text}‬‏"
+
+
+def segments_to_srt(segments, lead_in=0.0, rtl=False):
     if lead_in:
         segments = apply_lead_in(segments, lead_in)
-    blocks = [f"{i}\n{format_srt_time(a)} --> {format_srt_time(b)}\n{text}\n"
+    blocks = [f"{i}\n{format_srt_time(a)} --> {format_srt_time(b)}\n{rtl_line(text) if rtl else text}\n"
               for i, (a, b, text) in enumerate(segments, 1)]
     return "\n".join(blocks)
+
+
+def parse_translations(raw):
+    """Gemini JSON reply [{id, text}] -> {id: text}; salvages complete objects from truncated JSON."""
+    try:
+        items = json.loads(raw)
+    except json.JSONDecodeError:
+        items = []
+        for m in re.finditer(r"\{[^{}]*\}", raw):
+            try:
+                items.append(json.loads(m.group(0)))
+            except json.JSONDecodeError:
+                pass
+    out = {}
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        try:
+            i = int(it.get("id"))
+        except (TypeError, ValueError):
+            continue
+        text = " ".join(str(it.get("text", "")).split())
+        if text:
+            out[i] = text
+    return out
+
+
+def call_with_quota_retry(fn, notify, attempts=4):
+    """Run fn(); on a per-minute quota error (HTTP 429, e.g. free tier's 5 requests/minute)
+    wait the delay Gemini asks for and try again. Daily quotas are not retried."""
+    from google.genai import errors
+
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except errors.ClientError as e:
+            msg = str(e)
+            if getattr(e, "code", None) != 429 or attempt == attempts - 1 or "PerDay" in msg:
+                raise
+            m = re.search(r"retry in ([\d.]+)\s*s", msg)
+            delay = min(float(m.group(1)) if m else 30.0, 90.0) + 1
+            notify(f"הגעת למכסת הבקשות לדקה (מסלול חינמי?) – ממתין {int(delay)} שניות ומנסה שוב...")
+            time.sleep(delay)
+
+
+def add_usage(total, usage):
+    for k in ("audio_in", "text_in", "out", "total"):
+        total[k] = total.get(k, 0) + usage.get(k, 0)
+    return total
 
 
 class TranscribeWorker(QThread):
     finished_ok = Signal(str, dict, list)  # text, usage, segments (empty unless SRT requested)
     failed = Signal(str)
+    progress = Signal(str)
 
     def __init__(self, key, model, path, want_srt=False, lang=DEFAULT_LANG):
         super().__init__()
@@ -234,8 +323,8 @@ class TranscribeWorker(QThread):
                 gen_cfg.thinking_config = types.ThinkingConfig(thinking_budget=0)
             try:
                 prompt = lang_instruction(self.lang) + (SRT_PROMPT if self.want_srt else PROMPT)
-                resp = client.models.generate_content(
-                    model=self.model, contents=[prompt, uploaded], config=gen_cfg)
+                resp = call_with_quota_retry(lambda: client.models.generate_content(
+                    model=self.model, contents=[prompt, uploaded], config=gen_cfg), self.progress.emit)
             finally:
                 try:
                     client.files.delete(name=uploaded.name)
@@ -251,6 +340,85 @@ class TranscribeWorker(QThread):
                     raise RuntimeError("לא ניתן היה לפענח כתוביות מתשובת המודל.")
                 text = "\n".join(s[2] for s in segments)
             self.finished_ok.emit(text, extract_usage(resp), segments)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class TranslateWorker(QThread):
+    """Translates the finished transcript (text only, no audio upload) and, if present, the subtitles."""
+
+    finished_ok = Signal(str, dict, list)  # translated text, usage, translated segments
+    failed = Signal(str)
+    progress = Signal(str)
+
+    def __init__(self, key, model, src, tgt, text, segments):
+        super().__init__()
+        self.key, self.model = key, model
+        self.src, self.tgt = LANGUAGES[src][1], LANGUAGES[tgt][1]
+        self.text, self.segments = text, segments
+
+    def _config(self, types, json_schema=None):
+        cfg = types.GenerateContentConfig(temperature=0, max_output_tokens=65536)
+        if json_schema:
+            cfg.response_mime_type = "application/json"
+            cfg.response_schema = json_schema
+        if "flash" in self.model:
+            cfg.thinking_config = types.ThinkingConfig(thinking_budget=0)
+        return cfg
+
+    def _translate_batch(self, client, types, items, usage):
+        """items: [(id, text)] -> {id: translated}; one retry for ids the model skipped."""
+        prompt = TRANSLATE_SRT_PROMPT.format(src=self.src, tgt=self.tgt)
+        result = {}
+        todo = items
+        for _attempt in range(2):
+            payload = json.dumps([{"id": i, "text": t} for i, t in todo], ensure_ascii=False)
+            resp = call_with_quota_retry(lambda: client.models.generate_content(
+                model=self.model, contents=[prompt, payload],
+                config=self._config(types, TRANSLATE_SRT_SCHEMA)), self.progress.emit)
+            add_usage(usage, extract_usage(resp))
+            got = parse_translations(resp.text or "")
+            wanted = {i for i, _ in todo}
+            result.update({i: t for i, t in got.items() if i in wanted})
+            todo = [(i, t) for i, t in todo if i not in result]
+            if not todo:
+                break
+        return result
+
+    def run(self):
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(api_key=self.key)
+            usage = {}
+            new_segments = []
+            if self.segments:
+                items = [(i, seg[2]) for i, seg in enumerate(self.segments, 1)]
+                batches = [items[k:k + SRT_TRANSLATE_BATCH] for k in range(0, len(items), SRT_TRANSLATE_BATCH)]
+                translated = {}
+                for n, batch in enumerate(batches, 1):
+                    self.progress.emit(f"מתרגם כתוביות... (חלק {n} מתוך {len(batches)})")
+                    translated.update(self._translate_batch(client, types, batch, usage))
+                # a subtitle the model never returned stays in the source language
+                new_segments = [(a, b, translated.get(i, text))
+                                for i, (a, b, text) in enumerate(self.segments, 1)]
+
+            source_text = "\n".join(s[2] for s in self.segments)
+            if self.segments and self.text.strip() == source_text.strip():
+                # transcript wasn't edited: the subtitle translation already is the text translation
+                text = "\n".join(s[2] for s in new_segments)
+            else:
+                self.progress.emit("מתרגם טקסט...")
+                resp = call_with_quota_retry(lambda: client.models.generate_content(
+                    model=self.model,
+                    contents=[TRANSLATE_PROMPT.format(src=self.src, tgt=self.tgt), self.text],
+                    config=self._config(types)), self.progress.emit)
+                add_usage(usage, extract_usage(resp))
+                text = (resp.text or "").strip()
+                if not text:
+                    raise RuntimeError("לא התקבל תרגום מהמודל.")
+            self.finished_ok.emit(text, usage, new_segments)
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -287,6 +455,103 @@ class DropLabel(QLabel):
             self.file_dropped.emit(urls[0].toLocalFile())
 
 
+def format_clock(ms):
+    """Milliseconds -> 'M:SS' (or 'H:MM:SS' for an hour or more)."""
+    s = max(int(ms), 0) // 1000
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+class SeekSlider(QSlider):
+    """Horizontal slider that jumps straight to the clicked point (and can then be dragged)."""
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            value = QStyle.sliderValueFromPosition(
+                self.minimum(), self.maximum(), int(e.position().x()), self.width())
+            self.setValue(value)
+            self.sliderMoved.emit(value)
+        super().mousePressEvent(e)
+
+
+class AudioPlayer(QWidget):
+    """Play/Pause, Stop, seek bar and elapsed/total time for the loaded audio file."""
+
+    def __init__(self):
+        super().__init__()
+        # media controls read left-to-right even in a Hebrew UI (time flows left -> right)
+        self.setLayoutDirection(Qt.LeftToRight)
+
+        self.player = QMediaPlayer(self)
+        self.audio = QAudioOutput(self)
+        self.player.setAudioOutput(self.audio)
+
+        self.play_btn = QPushButton()
+        self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play_btn.setToolTip("ניגון / השהיה")
+        self.play_btn.clicked.connect(self.toggle_play)
+        self.stop_btn = QPushButton()
+        self.stop_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
+        self.stop_btn.setToolTip("עצירה וחזרה להתחלה")
+        self.stop_btn.clicked.connect(self.player.stop)
+
+        self.slider = SeekSlider(Qt.Horizontal)
+        self.slider.setRange(0, 0)
+        self.slider.setToolTip("לחץ או גרור כדי לקפוץ לנקודה בקובץ")
+        self.slider.sliderMoved.connect(self.on_slider_moved)
+        self.slider.sliderReleased.connect(lambda: self.player.setPosition(self.slider.value()))
+
+        self.time_label = QLabel("0:00 / 0:00")
+        self.time_label.setMinimumWidth(110)
+        self.time_label.setAlignment(Qt.AlignCenter)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.play_btn)
+        row.addWidget(self.stop_btn)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self.time_label)
+
+        self.player.positionChanged.connect(self.on_position)
+        self.player.durationChanged.connect(self.on_duration)
+        self.player.playbackStateChanged.connect(self.on_state)
+        self.set_enabled(False)
+
+    def set_enabled(self, on):
+        for w in (self.play_btn, self.stop_btn, self.slider):
+            w.setEnabled(on)
+
+    def load(self, path):
+        self.player.stop()
+        self.player.setSource(QUrl.fromLocalFile(str(path)))
+        self.slider.setValue(0)
+        self.set_enabled(True)
+
+    def toggle_play(self):
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    def on_slider_moved(self, value):
+        # while dragging, show the target time; the actual seek happens on release
+        self.time_label.setText(f"{format_clock(value)} / {format_clock(self.player.duration())}")
+
+    def on_position(self, pos):
+        if not self.slider.isSliderDown():
+            self.slider.setValue(pos)
+            self.time_label.setText(f"{format_clock(pos)} / {format_clock(self.player.duration())}")
+
+    def on_duration(self, dur):
+        self.slider.setRange(0, dur)
+        self.time_label.setText(f"{format_clock(self.player.position())} / {format_clock(dur)}")
+
+    def on_state(self, state):
+        icon = QStyle.SP_MediaPause if state == QMediaPlayer.PlayingState else QStyle.SP_MediaPlay
+        self.play_btn.setIcon(self.style().standardIcon(icon))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -294,9 +559,13 @@ class MainWindow(QMainWindow):
         self.file_path = None
         self.worker = None
         self.segments = []  # (start, end, text) from the last SRT-enabled run
+        self.source_lang = None  # language of the current transcript
+        self.pending_lang = None  # language of the transcription in progress
+        self.trans_lang = None  # language of the current translation
+        self.trans_segments = []  # translated subtitles, same timestamps as self.segments
 
         self.setWindowTitle("Mp3toText – המרת אודיו לטקסט")
-        self.resize(860, 640)
+        self.resize(1060, 680)
         self.setAcceptDrops(True)  # dropping anywhere on the window also works
 
         central = QWidget()
@@ -332,12 +601,19 @@ class MainWindow(QMainWindow):
         reset_btn.setFixedWidth(30)
         reset_btn.clicked.connect(self.reset_totals)
         billing_btn = QPushButton("💳 חיוב")
-        billing_btn.setToolTip(
-            "פתיחת דף החיוב של Google Cloud בדפדפן\n"
-            "שם רואים את החיוב בפועל, אמצעי התשלום וקביעת תקציב/התראות.\n"
-            "הסכום המוצג כאן באפליקציה הוא הערכה בלבד.")
+        billing_btn.setToolTip("קישורים לחיוב ולמעקב אחר ניצול המכסה (נפתחים בדפדפן)")
         billing_btn.setCursor(Qt.PointingHandCursor)
-        billing_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(BILLING_URL)))
+        billing_menu = QMenu(billing_btn)
+        billing_menu.setToolTipsVisible(True)
+        act = billing_menu.addAction("💳 חיוב – Google Cloud")
+        act.setToolTip("החיוב בפועל, אמצעי התשלום וקביעת תקציב/התראות.\n"
+                       "הסכום המוצג באפליקציה הוא הערכה בלבד.")
+        act.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(BILLING_URL)))
+        act = billing_menu.addAction("📊 מעקב אחר ניצול המכסה")
+        act.setToolTip("כמה בקשות נוצלו מהמכסה לדקה וליום (במסלול החינמי: 20 בקשות ביום למודל),\n"
+                       "ומתי היא מתאפסת.")
+        act.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(RATE_LIMIT_URL)))
+        billing_btn.setMenu(billing_menu)
         top.addWidget(self.convert_btn)
         top.addWidget(lang_label)
         top.addWidget(self.lang_combo)
@@ -355,12 +631,45 @@ class MainWindow(QMainWindow):
         self.drop.clicked.connect(self.browse)
         root.addWidget(self.drop)
 
+        # --- audio player for the loaded file ---
+        self.audio_player = AudioPlayer()
+        root.addWidget(self.audio_player)
+
         # --- text output: Qt picks direction per paragraph (Hebrew RTL, English LTR) ---
         self.text = QTextEdit()
         self.text.setAcceptRichText(False)
         self.text.setFont(QFont("Segoe UI", 12))
         self.text.setPlaceholderText("כאן יופיע התמלול")
-        root.addWidget(self.text, 1)
+        self.trans_text = QTextEdit()
+        self.trans_text.setAcceptRichText(False)
+        self.trans_text.setFont(QFont("Segoe UI", 12))
+        self.trans_text.setPlaceholderText("כאן יופיע התרגום")
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.text, "מקור")
+        self.tabs.addTab(self.trans_text, "תרגום")
+        self.tabs.setTabEnabled(1, False)
+        self.tabs.currentChanged.connect(self.update_output_buttons)
+
+        # translate controls sit at the far end of the tab bar
+        corner = QWidget()
+        corner_row = QHBoxLayout(corner)
+        corner_row.setContentsMargins(0, 0, 0, 0)
+        self.target_combo = QComboBox()
+        self.target_combo.setToolTip("שפת היעד לתרגום")
+        self.target_combo.currentIndexChanged.connect(self.on_target_changed)
+        self.translate_btn = QPushButton("🌐 תרגם")
+        self.translate_btn.setToolTip(
+            "מתרגם את התמלול (וגם את הכתוביות, אם נוצרו) לשפה שנבחרה.\n"
+            "נשלח רק טקסט, בלי האודיו, ולכן זה מהיר וזול. התזמון של הכתוביות נשמר.")
+        self.translate_btn.setEnabled(False)
+        self.translate_btn.clicked.connect(self.translate)
+        corner_row.addWidget(QLabel("תרגם ל:"))
+        corner_row.addWidget(self.target_combo)
+        corner_row.addWidget(self.translate_btn)
+        self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
+        # by default the corner is squeezed below the button's natural height, clipping its bottom edge
+        corner.setMinimumHeight(self.translate_btn.sizeHint().height() + 2)
+        root.addWidget(self.tabs, 1)
 
         # --- bottom bar ---
         bottom = QHBoxLayout()
@@ -379,11 +688,20 @@ class MainWindow(QMainWindow):
         self.save_srt_btn = QPushButton("🎬 שמור כ-SRT")
         self.save_srt_btn.setEnabled(False)
         self.save_srt_btn.clicked.connect(self.save_srt)
+        self.rtl_check = QCheckBox("RTL לנגנים")
+        self.rtl_check.setToolTip(
+            "בכתוביות בעברית: מוסיף לכל שורה סימני כיוון בלתי נראים,\n"
+            "כדי שנגנים יציגו את הנקודה ואת סימן השאלה בצד הנכון.")
+        self.rtl_check.setChecked(bool(self.cfg.get("srt_rtl_fix", True)))
+        self.rtl_check.toggled.connect(self.on_rtl_toggled)
         clear_btn = QPushButton("נקה")
         clear_btn.clicked.connect(self.clear_output)
         self.status = QLabel("")
         self.op_label = QLabel("")
         self.op_label.setStyleSheet("color:#555;")
+        # long status/cost texts may be clipped instead of widening the window (full text in tooltip)
+        for label in (self.status, self.op_label, self.total_label):
+            label.setMinimumWidth(1)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)  # indeterminate
         self.progress.setFixedWidth(120)
@@ -393,6 +711,7 @@ class MainWindow(QMainWindow):
         bottom.addWidget(lead_label)
         bottom.addWidget(self.lead_spin)
         bottom.addWidget(self.save_srt_btn)
+        bottom.addWidget(self.rtl_check)
         bottom.addWidget(clear_btn)
         bottom.addStretch()
         bottom.addWidget(self.op_label)
@@ -401,6 +720,7 @@ class MainWindow(QMainWindow):
         root.addLayout(bottom)
 
         self.update_total_label()
+        self.refresh_targets()
 
         if not self.get_api_key():
             self.set_status("לא הוגדר מפתח API – לחץ על ⚙ מפתח API")
@@ -408,6 +728,7 @@ class MainWindow(QMainWindow):
     # ---------- helpers ----------
     def set_status(self, msg):
         self.status.setText(msg)
+        self.status.setToolTip(msg)
 
     def on_srt_toggled(self, checked):
         self.cfg["srt"] = checked
@@ -421,13 +742,53 @@ class MainWindow(QMainWindow):
         self.cfg["srt_lead_in_ms"] = value
         save_config(self.cfg)
 
+    def on_rtl_toggled(self, checked):
+        self.cfg["srt_rtl_fix"] = checked
+        save_config(self.cfg)
+
+    def on_target_changed(self, _index):
+        if self.target_combo.currentData():
+            self.cfg["translate_to"] = self.target_combo.currentData()
+            save_config(self.cfg)
+
     def set_segments(self, segments):
         self.segments = segments
-        self.save_srt_btn.setEnabled(bool(segments))
+        self.update_output_buttons()
+
+    def current_output(self):
+        """(text box, subtitles, language) of the tab currently shown."""
+        if self.tabs.currentIndex() == 1:
+            return self.trans_text, self.trans_segments, self.trans_lang
+        return self.text, self.segments, self.source_lang
+
+    def update_output_buttons(self, *_):
+        self.save_srt_btn.setEnabled(bool(self.current_output()[1]))
+
+    def refresh_targets(self):
+        """Fill "translate to" with every language except the transcript's own."""
+        self.target_combo.blockSignals(True)
+        self.target_combo.clear()
+        for code, (label, _name) in LANGUAGES.items():
+            if code != self.source_lang:
+                self.target_combo.addItem(label, code)
+        idx = self.target_combo.findData(self.cfg.get("translate_to"))
+        self.target_combo.setCurrentIndex(max(idx, 0))
+        self.target_combo.blockSignals(False)
+        self.translate_btn.setEnabled(bool(self.source_lang) and not self.worker)
+
+    def reset_translation(self):
+        self.trans_text.clear()
+        self.trans_segments = []
+        self.trans_lang = None
+        self.tabs.setTabText(1, "תרגום")
+        self.tabs.setTabEnabled(1, False)
+        self.tabs.setCurrentIndex(0)
+        self.update_output_buttons()
 
     def clear_output(self):
         self.text.clear()
         self.set_segments([])
+        self.reset_translation()
 
     def get_api_key(self):
         return clean_key(self.cfg.get("api_key") or os.environ.get("GEMINI_API_KEY", ""))
@@ -486,6 +847,11 @@ class MainWindow(QMainWindow):
             return
         self.file_path = p
         self.set_segments([])  # old subtitles belong to the previous file
+        self.reset_translation()
+        self.source_lang = None
+        self.tabs.setTabText(0, "מקור")
+        self.refresh_targets()
+        self.audio_player.load(p)
         size_mb = p.stat().st_size / (1024 * 1024)
         self.drop.setText(f"🎵 {p.name}\n({size_mb:.1f} MB) – גרור קובץ אחר להחלפה")
         self.convert_btn.setEnabled(True)
@@ -499,29 +865,78 @@ class MainWindow(QMainWindow):
             self.ask_api_key()
             if not self.get_api_key():
                 return
-        self.convert_btn.setEnabled(False)
-        self.progress.show()
-        self.set_status("מעלה ומתמלל... (עשוי לקחת זמן בקבצים ארוכים)")
+        self.pending_lang = self.lang_combo.currentData()
         self.worker = TranscribeWorker(self.get_api_key(), self.cfg.get("model", DEFAULT_MODEL),
-                                       self.file_path, self.srt_check.isChecked(),
-                                       self.lang_combo.currentData())
+                                       self.file_path, self.srt_check.isChecked(), self.pending_lang)
         self.worker.finished_ok.connect(self.on_done)
+        self.worker.progress.connect(self.set_status)
+        self._start("מעלה ומתמלל... (עשוי לקחת זמן בקבצים ארוכים)")
+
+    def _start(self, status):
+        """Common start for transcription/translation workers (self.worker must be set)."""
+        self.convert_btn.setEnabled(False)
+        self.translate_btn.setEnabled(False)
+        self.progress.show()
+        self.set_status(status)
         self.worker.failed.connect(self.on_error)
         self.worker.start()
 
     def _finish(self):
         self.progress.hide()
-        self.convert_btn.setEnabled(True)
+        self.convert_btn.setEnabled(bool(self.file_path))
         self.worker.deleteLater()
         self.worker = None
+        self.translate_btn.setEnabled(bool(self.source_lang))
 
     def on_done(self, text, usage, segments):
+        self.source_lang = self.pending_lang
         self._finish()
         self.text.setPlainText(text)
         self.set_segments(segments)
+        self.reset_translation()
+        self.tabs.setTabText(0, f"מקור ({LANGUAGES[self.source_lang][0]})")
+        self.refresh_targets()
         extra = f", {len(segments)} כתוביות" if segments else ""
         self.set_status(f"הסתיים ✔ ({len(text.split())} מילים{extra})")
+        self.record_usage(usage)
 
+    # ---------- translation ----------
+    def translate(self):
+        if self.worker or not self.source_lang:
+            return
+        text = self.text.toPlainText()
+        if not text.strip():
+            self.set_status("אין טקסט לתרגום")
+            return
+        if not self.get_api_key():
+            self.ask_api_key()
+            if not self.get_api_key():
+                return
+        tgt = self.target_combo.currentData()
+        self.worker = TranslateWorker(self.get_api_key(), self.cfg.get("model", DEFAULT_MODEL),
+                                      self.source_lang, tgt, text, list(self.segments))
+        self.worker.tgt_code = tgt
+        self.worker.progress.connect(self.set_status)
+        self.worker.finished_ok.connect(self.on_translated)
+        self._start(f"מתרגם ל{LANGUAGES[tgt][0]}...")
+
+    def on_translated(self, text, usage, segments):
+        self.trans_lang = self.worker.tgt_code
+        self._finish()
+        self.trans_text.setPlainText(text)
+        self.trans_segments = segments
+        self.tabs.setTabText(1, f"תרגום ({LANGUAGES[self.trans_lang][0]})")
+        self.tabs.setTabEnabled(1, True)
+        self.tabs.setCurrentIndex(1)
+        self.update_output_buttons()
+        kept = sum(1 for (_, _, t), (_, _, o) in zip(segments, self.segments) if t == o)
+        extra = f", {len(segments)} כתוביות" if segments else ""
+        warn = f" ⚠ {kept} כתוביות זהות למקור (ייתכן שלא תורגמו)" if kept else ""
+        self.set_status(f"התרגום הסתיים ✔ ({len(text.split())} מילים{extra}){warn}")
+        self.record_usage(usage)
+
+    def record_usage(self, usage):
+        """Show the cost of the last operation and add it to the running total."""
         model = self.cfg.get("model", DEFAULT_MODEL)
         cost = usage_cost(usage, self.prices_for(model))
         self.op_label.setText("פעולה זו: " + self.format_usage(usage["total"], cost))
@@ -553,7 +968,7 @@ class MainWindow(QMainWindow):
         t = self.cfg.get("totals", {"tokens": 0, "usd": 0.0, "runs": 0})
         self.total_label.setText("סה״כ: " + self.format_usage(t["tokens"], t["usd"]))
         self.total_label.setToolTip(
-            f"{t['runs']} המרות\nהמחיר לפי שכבה בתשלום. בשכבה החינמית אין חיוב.\n"
+            f"{t['runs']} פעולות (תמלול / תרגום)\nהמחיר לפי שכבה בתשלום. בשכבה החינמית אין חיוב.\n"
             f"שער ₪ משוער: {self.cfg.get('usd_to_ils', DEFAULT_USD_TO_ILS)}")
 
     def reset_totals(self):
@@ -564,40 +979,46 @@ class MainWindow(QMainWindow):
 
     def on_error(self, msg):
         self._finish()
-        self.set_status("ההמרה נכשלה")
-        QMessageBox.critical(self, "שגיאה", f"ההמרה נכשלה:\n{msg}")
+        self.set_status("הפעולה נכשלה")
+        QMessageBox.critical(self, "שגיאה", f"הפעולה נכשלה:\n{msg}")
 
     # ---------- output ----------
     def copy_all(self):
-        content = self.text.toPlainText()
+        content = self.current_output()[0].toPlainText()
         if not content.strip():
             self.set_status("אין טקסט להעתקה")
             return
         QGuiApplication.clipboard().setText(content)
         self.set_status("הטקסט הועתק ללוח ✔")
 
+    def default_save_path(self, ext, fallback):
+        """Same folder and base name as the audio file; a translation adds its language
+        code (lecture.en.srt), which players such as VLC recognise."""
+        if not self.file_path:
+            return fallback + ext
+        lang_tag = f".{self.trans_lang}" if self.tabs.currentIndex() == 1 else ""
+        return str(self.file_path.with_name(self.file_path.stem + lang_tag + ext))
+
     def save_text(self):
-        content = self.text.toPlainText()
+        content = self.current_output()[0].toPlainText()
         if not content.strip():
             return
-        # default: same folder and base name as the loaded audio file
-        if self.file_path:
-            default = str(self.file_path.with_suffix(".txt"))
-        else:
-            default = "transcript.txt"
-        path, _ = QFileDialog.getSaveFileName(self, "שמירת תמלול", default, "Text (*.txt)")
+        default = self.default_save_path(".txt", "transcript")
+        path, _ = QFileDialog.getSaveFileName(self, "שמירת טקסט", default, "Text (*.txt)")
         if path:
             Path(path).write_text(content, encoding="utf-8")
             self.set_status(f"נשמר: {Path(path).name}")
 
     def save_srt(self):
-        if not self.segments:
+        _edit, segments, lang = self.current_output()
+        if not segments:
             return
-        default = str(self.file_path.with_suffix(".srt")) if self.file_path else "subtitles.srt"
+        default = self.default_save_path(".srt", "subtitles")
         path, _ = QFileDialog.getSaveFileName(self, "שמירת כתוביות", default, "SubRip (*.srt)")
         if path:
+            rtl = self.rtl_check.isChecked() and lang in RTL_LANGS
             # UTF-8 with BOM so Hebrew shows correctly in every player/editor
-            srt = segments_to_srt(self.segments, self.lead_spin.value() / 1000)
+            srt = segments_to_srt(segments, self.lead_spin.value() / 1000, rtl=rtl)
             Path(path).write_text(srt, encoding="utf-8-sig")
             self.set_status(f"נשמר: {Path(path).name}")
 

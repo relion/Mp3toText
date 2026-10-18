@@ -97,9 +97,11 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <li><a href="#51-קבועים">5.1 קבועים</a></li>
 <li><a href="#52-פונקציות-עזר">5.2 פונקציות עזר</a></li>
 <li><a href="#53-המחלקה-transcribeworkerqthread">5.3 המחלקה <bdi dir="ltr">TranscribeWorker(QThread)</bdi></a></li>
-<li><a href="#54-המחלקה-droplabelqlabel">5.4 המחלקה <bdi dir="ltr">DropLabel(QLabel)</bdi></a></li>
-<li><a href="#55-המחלקה-mainwindowqmainwindow">5.5 המחלקה <bdi dir="ltr">MainWindow(QMainWindow)</bdi></a></li>
-<li><a href="#56-main">5.6 <bdi dir="ltr">main()</bdi></a></li>
+<li><a href="#54-המחלקה-translateworkerqthread">5.4 המחלקה <bdi dir="ltr">TranslateWorker(QThread)</bdi></a></li>
+<li><a href="#55-המחלקה-droplabelqlabel">5.5 המחלקה <bdi dir="ltr">DropLabel(QLabel)</bdi></a></li>
+<li><a href="#56-המחלקות-audioplayerqwidget-ו-seeksliderqslider">5.6 המחלקות <bdi dir="ltr">AudioPlayer(QWidget)</bdi> ו-<bdi dir="ltr">SeekSlider(QSlider)</bdi></a></li>
+<li><a href="#57-המחלקה-mainwindowqmainwindow">5.7 המחלקה <bdi dir="ltr">MainWindow(QMainWindow)</bdi></a></li>
+<li><a href="#58-main">5.8 <bdi dir="ltr">main()</bdi></a></li>
 </ul>
 </li>
 <li><a href="#6-תרשימי-זרימה">6. תרשימי זרימה</a><ul>
@@ -107,6 +109,7 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <li><a href="#62-תהליך-ההמרה-threads-ו-api">6.2 תהליך ההמרה (<bdi dir="ltr">Threads</bdi> ו-<bdi dir="ltr">API</bdi>)</a></li>
 <li><a href="#63-עיבוד-כתוביות-ושמירת-srt">6.3 עיבוד כתוביות ושמירת <bdi dir="ltr">SRT</bdi></a></li>
 <li><a href="#64-חישוב-עלות-וסהכ-מצטבר">6.4 חישוב עלות וסה״כ מצטבר</a></li>
+<li><a href="#65-תרגום">6.5 תרגום</a></li>
 </ul>
 </li>
 <li><a href="#7-החלטות-תכנון">7. החלטות תכנון</a><ul>
@@ -118,6 +121,9 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <li><a href="#76-הקדמת-כתוביות">7.6 הקדמת כתוביות</a></li>
 <li><a href="#77-srt-עם-bom">7.7 <bdi dir="ltr">SRT</bdi> עם <bdi dir="ltr">BOM</bdi></a></li>
 <li><a href="#78-מחיקת-הקובץ-מהשרת">7.8 מחיקת הקובץ מהשרת</a></li>
+<li><a href="#79-תרגום-של-התמלול-לא-של-האודיו">7.9 תרגום של התמלול, לא של האודיו</a></li>
+<li><a href="#710-סימני-כיוון-ב-srt">7.10 סימני כיוון ב-<bdi dir="ltr">SRT</bdi></a></li>
+<li><a href="#711-מכסת-בקשות-לדקה">7.11 מכסת בקשות לדקה</a></li>
 </ul>
 </li>
 <li><a href="#8-פתרון-תקלות">8. פתרון תקלות</a></li>
@@ -128,7 +134,7 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
   </nav>
   <main>
 <h1 id="mp3totext-תיעוד-הפרויקט">Mp3toText – תיעוד הפרויקט</h1>
-<p>אפליקציית דסקטופ ל-Windows שממירה קובצי אודיו (MP3 ועוד) לטקסט באמצעות Gemini API של גוגל. אפשר גם ליצור ממנה קובץ כתוביות SRT עם חותמות זמן. הממשק בעברית, מימין לשמאל, עם תמיכה מלאה בטקסט דו-כיווני (עברית ואנגלית באותו מסמך).</p>
+<p>אפליקציית דסקטופ ל-Windows שממירה קובצי אודיו (MP3 ועוד) לטקסט באמצעות Gemini API של גוגל. אפשר גם ליצור ממנה קובץ כתוביות SRT עם חותמות זמן, ולתרגם את התמלול ואת הכתוביות לשפה אחרת. הממשק בעברית, מימין לשמאל, עם תמיכה מלאה בטקסט דו-כיווני (עברית ואנגלית באותו מסמך).</p>
 <hr />
 <h2 id="1-התקנה">1. התקנה</h2>
 <p><strong>דרישות:</strong></p>
@@ -150,7 +156,7 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <tbody>
 <tr>
 <td><code>PySide6</code></td>
-<td>ממשק המשתמש (Qt), כולל גרירת קבצים ותמיכה בעברית מימין לשמאל</td>
+<td>ממשק המשתמש (Qt), כולל גרירת קבצים, תמיכה בעברית מימין לשמאל ונגן האודיו (QtMultimedia)</td>
 </tr>
 <tr>
 <td><code>google-genai</code></td>
@@ -170,12 +176,17 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <h3 id="מבנה-החלון">מבנה החלון</h3>
 <p><img alt="החלון הראשי של Mp3toText" src="images/main-window.png" /></p>
 <p><strong>סרגל עליון (מימין לשמאל):</strong> המר לטקסט · שפה · צור גם כתוביות (SRT) · סה״כ טוקנים ועלות · ↺ איפוס · 💳 חיוב · ⚙ מפתח API<br />
-<strong>באמצע:</strong> אזור הגרירה, ומתחתיו תיבת הטקסט (פסקה בעברית מימין לשמאל, פסקה באנגלית משמאל לימין).<br />
-<strong>סרגל תחתון (מימין לשמאל):</strong> העתק הכל · שמור כקובץ · הקדמה · שמור כ-SRT · נקה · עלות הפעולה האחרונה · סטטוס</p>
+<strong>באמצע:</strong> אזור הגרירה, מתחתיו נגן האודיו (▶/⏸ · ⏹ · ציר זמן · זמן נוכחי / אורך כולל), ומתחתיו תיבת הטקסט עם שתי לשוניות, <strong>מקור</strong> ו<strong>תרגום</strong> (פסקה בעברית מימין לשמאל, פסקה באנגלית משמאל לימין). בקצה השמאלי של שורת הלשוניות: <strong>תרגם ל:</strong> ו-<strong>🌐 תרגם</strong>.<br />
+<strong>סרגל תחתון (מימין לשמאל):</strong> העתק הכל · שמור כקובץ · הקדמה · שמור כ-SRT · RTL לנגנים · נקה · עלות הפעולה האחרונה · סטטוס</p>
 <h3 id="שלבי-עבודה">שלבי עבודה</h3>
 <ol>
 <li><strong>מפתח API (פעם אחת):</strong> לוחצים <strong>⚙ מפתח API</strong> ומדביקים את המפתח. הוא נשמר ב-<code>config.json</code>. אפשר במקום זה להגדיר משתנה סביבה <code>GEMINI_API_KEY</code>. אין לך מפתח? בחלון המפתח יש כפתור <strong>🔑 קבלת מפתח ב-Google AI Studio</strong> שפותח את https://aistudio.google.com/api-keys.</li>
 <li><strong>טעינת קובץ:</strong> גוררים קובץ אודיו לחלון (לאזור הגרירה או לכל מקום בחלון), או לוחצים על אזור הגרירה ובוחרים קובץ. נתמכים: <code>mp3</code>, <code>wav</code>, <code>m4a</code>, <code>ogg</code>, <code>flac</code>, <code>aac</code>.</li>
+<li><strong>האזנה (לא חובה):</strong> נגן האודיו שמתחת לאזור הגרירה מאפשר לשמוע את הקובץ שנטען:
+   - <strong>▶ / ⏸</strong> מנגן או משהה.
+   - <strong>⏹</strong> עוצר וחוזר להתחלה.
+   - <strong>ציר הזמן:</strong> לחיצה על נקודה בציר קופצת אליה, ואפשר גם לגרור את הסמן. בזמן הגרירה מוצג זמן היעד, והקפיצה מתבצעת כשמשחררים.
+   - <strong>זמן נוכחי / אורך כולל</strong> מוצג מימין לציר, למשל <code>1:05 / 14:42</code>.</li>
 <li><strong>שפה:</strong> בוחרים את שפת הדיבור באודיו (עברית / English / Română). המודל מתמלל באותה שפה ולא מתרגם.</li>
 <li><strong>כתוביות (לא חובה):</strong> מסמנים <strong>צור גם כתוביות (SRT)</strong> אם רוצים גם חותמות זמן.</li>
 <li><strong>המרה:</strong> לוחצים <strong>▶ המר לטקסט</strong>. פס ההתקדמות פועל, והממשק נשאר זמין בזמן ההמרה.</li>
@@ -185,12 +196,22 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
    - <strong>💾 שמור כקובץ</strong> שומר קובץ <code>.txt</code>. חלון השמירה נפתח בתיקייה של קובץ האודיו, עם אותו שם בסיס.
    - <strong>🎬 שמור כ-SRT</strong> (זמין רק אחרי המרה עם כתוביות) שומר קובץ <code>.srt</code> באותו אופן.
    - <strong>הקדמה (ms):</strong> מקדים את זמן ההופעה של כל כתובית, כי חותמות הזמן של Gemini נוטות לאחר מעט. ברירת המחדל היא 200ms. אם הכתוביות עדיין מאחרות, מגדילים את הערך.
-   - <strong>נקה</strong> מוחק את הטקסט ואת הכתוביות.</li>
+   - <strong>RTL לנגנים</strong> (מסומן כברירת מחדל): בשמירת כתוביות בעברית מוסיף לכל שורה סימני כיוון בלתי נראים, כדי שנגנים יציגו את הנקודה ואת סימן השאלה בצד הנכון ואת סדר המילים הנכון בשורה מעורבת. ראו <a href="#710-סימני-כיוון-ב-srt">7.10</a>.
+   - <strong>נקה</strong> מוחק את הטקסט, הכתוביות והתרגום.</li>
+<li><strong>תרגום (לא חובה):</strong> אחרי התמלול בוחרים שפה ב-<strong>תרגם ל:</strong> (מופיעות רק השפות שאינן שפת המקור) ולוחצים <strong>🌐 תרגם</strong>.
+   - התרגום מופיע בלשונית <strong>תרגום (English)</strong>, שנפתחת אוטומטית. אפשר לעבור בין הלשוניות בכל רגע.
+   - הכפתורים <strong>העתק הכל</strong>, <strong>שמור כקובץ</strong> ו-<strong>שמור כ-SRT</strong> פועלים על הלשונית הפתוחה.
+   - בשמירת תרגום שם הקובץ המוצע כולל את קוד השפה, למשל <code>הרצאה.en.txt</code> ו-<code>הרצאה.en.srt</code>. נגנים כמו VLC מזהים כך את שפת הכתוביות.
+   - בכתוביות המתורגמות התזמון זהה למקור, וגם <strong>הקדמה</strong> חלה עליהן.
+   - נשלח רק טקסט, בלי האודיו, ולכן התרגום מהיר וזול (בערך 1–2 סנט ל-15 דקות אודיו). העלות נכנסת לאותן תוויות.
+   - תרגום ה-TXT כולל תיקונים ידניים שעשית בלשונית המקור. תרגום ה-SRT נעשה על הכתוביות כפי שהמודל החזיר אותן, כי תיקונים בתיבה לא משפיעים על הכתוביות.</li>
 </ol>
 <h3 id="טוקנים-ועלות">טוקנים ועלות</h3>
 <ul>
 <li><strong>למעלה:</strong> הסך הכולל מכל ההמרות (טוקנים, דולרים ושקלים). הסכום נשמר ב-<code>config.json</code>, והכפתור <strong>↺</strong> מאפס אותו.</li>
-<li><strong>💳 חיוב:</strong> פותח בדפדפן את <a href="https://console.cloud.google.com/billing">דף החיוב של Google Cloud</a>. שם רואים את החיוב בפועל ואת אמצעי התשלום, ואפשר לקבוע תקציב והתראות. הסכום שמוצג באפליקציה הוא הערכה בלבד.</li>
+<li><strong>💳 חיוב:</strong> פותח תפריט עם שני קישורים, שנפתחים בדפדפן:</li>
+<li><strong>חיוב – Google Cloud</strong> (<a href="https://console.cloud.google.com/billing">console.cloud.google.com/billing</a>): החיוב בפועל ואמצעי התשלום, ואפשר לקבוע שם תקציב והתראות. הסכום שמוצג באפליקציה הוא הערכה בלבד.</li>
+<li><strong>מעקב אחר ניצול המכסה</strong> (<a href="https://ai.dev/rate-limit">ai.dev/rate-limit</a>): כמה בקשות נוצלו מהמכסה לדקה וליום, ומתי היא מתאפסת. במסלול החינמי המכסה של <code>gemini-2.5-flash</code> היא 20 בקשות ביום.</li>
 <li><strong>למטה:</strong> העלות של ההמרה האחרונה. כשמרחפים מעליה מוצג פירוט: אודיו נכנס, טקסט נכנס ופלט.</li>
 <li>המחיר מחושב לפי המחירון של שכבה בתשלום. <strong>בשכבה החינמית אין חיוב בפועל.</strong></li>
 </ul>
@@ -255,9 +276,21 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <td>שדה "הקדמה"</td>
 </tr>
 <tr>
+<td><code>translate_to</code></td>
+<td>השפה הראשונה ברשימה</td>
+<td>שפת היעד האחרונה לתרגום</td>
+<td>תיבת "תרגם ל:"</td>
+</tr>
+<tr>
+<td><code>srt_rtl_fix</code></td>
+<td><code>true</code></td>
+<td>הוספת סימני כיוון לכתוביות בעברית</td>
+<td>תיבת "RTL לנגנים"</td>
+</tr>
+<tr>
 <td><code>totals</code></td>
 <td><code>{tokens, usd, runs}</code></td>
-<td>הסך המצטבר</td>
+<td>הסך המצטבר (תמלולים ותרגומים)</td>
 <td>אוטומטי / ↺</td>
 </tr>
 <tr>
@@ -298,9 +331,11 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
     subgraph UI[&quot;⁧שכבת ממשק – Thread ראשי⁩&quot;]
         MW[&quot;MainWindow&quot;]
         DL[&quot;DropLabel&quot;]
+        AP[&quot;AudioPlayer&quot;]
     end
     subgraph BG[&quot;⁧שכבת עבודה – Thread רקע⁩&quot;]
         TW[&quot;TranscribeWorker - QThread&quot;]
+        TR[&quot;TranslateWorker - QThread&quot;]
     end
     subgraph PURE[&quot;⁧פונקציות עזר טהורות⁩&quot;]
         CFG[&quot;load_config / save_config&quot;]
@@ -309,16 +344,22 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
     end
     API[(&quot;Gemini API&quot;)]
     FILE[(&quot;config.json&quot;)]
+    QMP[(&quot;QMediaPlayer - FFmpeg&quot;)]
 
     DL -- &quot;file_dropped / clicked&quot; --&gt; MW
     MW -- &quot;start&quot; --&gt; TW
     TW -- &quot;finished_ok / failed&quot; --&gt; MW
     TW &lt;--&gt; API
+    MW -- &quot;translate&quot; --&gt; TR
+    TR -- &quot;finished_ok / progress&quot; --&gt; MW
+    TR &lt;--&gt; API
     TW --&gt; SRT
     TW --&gt; USE
     MW --&gt; CFG
     CFG &lt;--&gt; FILE
     MW --&gt; SRT
+    MW -- &quot;load&quot; --&gt; AP
+    AP &lt;--&gt; QMP
 </pre></div>
 <h3 id="51-קבועים">5.1 קבועים</h3>
 <div class="table-wrap"><table>
@@ -346,12 +387,28 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <td>קוד שפה ← (תווית בממשק, שם השפה באנגלית להנחיה)</td>
 </tr>
 <tr>
+<td><code>RTL_LANGS</code></td>
+<td>שפות מימין לשמאל (<code>he</code>), שלהן מוסיפים סימני כיוון ב-SRT</td>
+</tr>
+<tr>
 <td><code>PROMPT</code></td>
 <td>ההנחיה לתמלול טקסט רגיל</td>
 </tr>
 <tr>
 <td><code>SRT_PROMPT</code> + <code>SRT_SCHEMA</code></td>
 <td>ההנחיה וסכמת ה-JSON לתמלול עם חותמות זמן. המודל מחזיר מערך של <code>{start, end, text}</code></td>
+</tr>
+<tr>
+<td><code>TRANSLATE_PROMPT</code></td>
+<td>ההנחיה לתרגום טקסט רגיל</td>
+</tr>
+<tr>
+<td><code>TRANSLATE_SRT_PROMPT</code> + <code>TRANSLATE_SRT_SCHEMA</code></td>
+<td>ההנחיה וסכמת ה-JSON לתרגום כתוביות: מקבלים ומחזירים מערך של <code>{id, text}</code></td>
+</tr>
+<tr>
+<td><code>SRT_TRANSLATE_BATCH</code></td>
+<td>מספר כתוביות בכל בקשת תרגום (100), כדי שהתשובה לא תיקטע בקבצים ארוכים</td>
 </tr>
 <tr>
 <td><code>MIN_SEG_SECONDS</code> / <code>DEFAULT_SEG_SECONDS</code></td>
@@ -417,8 +474,24 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <td>מקדימה את זמן ההתחלה של כל כתובית בלי לרדת מתחת ל-0 ובלי חפיפה עם הכתובית הקודמת. זמני הסיום לא משתנים</td>
 </tr>
 <tr>
-<td><code>segments_to_srt(segments, lead_in)</code></td>
-<td>בונה את טקסט קובץ ה-SRT</td>
+<td><code>rtl_line(text)</code></td>
+<td>עוטפת שורת כתובית בסימני כיוון: RLM בשני הקצוות ו-RLE…PDF סביב הטקסט</td>
+</tr>
+<tr>
+<td><code>segments_to_srt(segments, lead_in, rtl)</code></td>
+<td>בונה את טקסט קובץ ה-SRT. עם <code>rtl=True</code> כל שורה עוברת דרך <code>rtl_line</code></td>
+</tr>
+<tr>
+<td><code>parse_translations(raw)</code></td>
+<td>תשובת JSON של תרגום כתוביות ← מילון <code>{id: text}</code>. מצילה אובייקטים שלמים מ-JSON קטוע</td>
+</tr>
+<tr>
+<td><code>add_usage(total, usage)</code></td>
+<td>מחברת מוני טוקנים של כמה קריאות למודל</td>
+</tr>
+<tr>
+<td><code>format_clock(ms)</code></td>
+<td>מילישניות ← <code>M:SS</code> (או <code>H:MM:SS</code> משעה ומעלה), לתצוגת הזמן בנגן</td>
 </tr>
 </tbody>
 </table></div>
@@ -438,14 +511,40 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
   6. במצב SRT מפענחת את הכתוביות ובונה מהן את הטקסט להצגה.
   7. משדרת <code>finished_ok</code> או <code>failed</code>.</li>
 </ul>
-<h3 id="54-המחלקה-droplabelqlabel">5.4 המחלקה <code>DropLabel(QLabel)</code></h3>
+<h3 id="54-המחלקה-translateworkerqthread">5.4 המחלקה <code>TranslateWorker(QThread)</code></h3>
+<p>מתרגמת את התמלול שכבר קיים, ב-thread נפרד. נשלח רק טקסט, בלי העלאת האודיו.</p>
+<ul>
+<li><strong>קלט:</strong> מפתח, מודל, שפת מקור, שפת יעד, הטקסט שבלשונית המקור, הכתוביות.</li>
+<li><strong>אותות:</strong> <code>finished_ok(text, usage, segments)</code>, <code>failed(message)</code>, <code>progress(status)</code> להודעות "חלק 2 מתוך 3".</li>
+<li><strong><code>run()</code>:</strong> ראו <a href="#65-תרגום">תרשים 6.5</a>.
+  1. <strong>כתוביות (אם יש):</strong> ממספרת אותן ושולחת במנות של 100 כ-JSON. התשובה חייבת להחזיר את אותם מספרים.
+  2. <strong><code>_translate_batch</code>:</strong> מספרים שהמודל דילג עליהם נשלחים שוב פעם אחת. כתובית שלא חזרה גם אז נשארת בשפת המקור, והממשק מתריע על כתוביות שזהות למקור.
+  3. <strong>זמנים:</strong> חותמות הזמן נלקחות מהמקור, ולכן התזמון זהה.
+  4. <strong>טקסט:</strong> אם הטקסט בתיבה זהה לטקסט הכתוביות (לא נערך), התרגום שלו נבנה מהכתוביות המתורגמות, בלי קריאה נוספת. אם נערך, או שאין כתוביות, נשלחת קריאת תרגום נפרדת לטקסט.
+  5. כל מוני הטוקנים מכל הקריאות מתחברים (<code>add_usage</code>) לעלות אחת.</li>
+</ul>
+<h3 id="55-המחלקה-droplabelqlabel">5.5 המחלקה <code>DropLabel(QLabel)</code></h3>
 <p>אזור הגרירה. מקבל קבצים בגרירה (<code>dragEnterEvent</code> / <code>dropEvent</code>), משנה צבע בזמן ריחוף ומשדר:</p>
 <ul>
 <li><code>file_dropped(path)</code>: כשנגרר קובץ.</li>
 <li><code>clicked()</code>: בלחיצה, ואז נפתח חלון בחירת קובץ.</li>
 </ul>
-<h3 id="55-המחלקה-mainwindowqmainwindow">5.5 המחלקה <code>MainWindow(QMainWindow)</code></h3>
-<p>החלון הראשי. מחזיקה את ההגדרות (<code>self.cfg</code>), את הקובץ הנוכחי (<code>self.file_path</code>), את ה-worker הפעיל (<code>self.worker</code>) ואת הכתוביות האחרונות (<code>self.segments</code>).</p>
+<h3 id="56-המחלקות-audioplayerqwidget-ו-seeksliderqslider">5.6 המחלקות <code>AudioPlayer(QWidget)</code> ו-<code>SeekSlider(QSlider)</code></h3>
+<p>נגן האודיו של הקובץ שנטען, מבוסס על <code>QMediaPlayer</code> ו-<code>QAudioOutput</code> מתוך QtMultimedia (חלק מ-PySide6, משתמש ב-FFmpeg המובנה). לא נדרשת ספרייה נוספת.</p>
+<ul>
+<li><strong>כיוון:</strong> הנגן מוגדר <code>LeftToRight</code> גם בתוך הממשק העברי, כי הזמן בציר מתקדם משמאל לימין, כמו ברוב נגני המדיה.</li>
+<li><strong><code>load(path)</code>:</strong> עוצרת ניגון קודם, טוענת את הקובץ (<code>QUrl.fromLocalFile</code>, תומך בשמות בעברית) ומפעילה את הכפתורים. <code>MainWindow.load_file</code> קוראת לה בכל טעינת קובץ.</li>
+<li><strong><code>toggle_play()</code>:</strong> מנגנת או משהה. האייקון מתחלף לפי <code>playbackStateChanged</code> (<code>on_state</code>).</li>
+<li><strong>Stop:</strong> <code>player.stop()</code> עוצר ומחזיר את המיקום ל-0.</li>
+<li><strong>סנכרון הציר:</strong></li>
+<li><code>durationChanged</code> ← <code>on_duration</code>: קובעת את טווח הציר במילישניות.</li>
+<li><code>positionChanged</code> ← <code>on_position</code>: מזיזה את הסמן ומעדכנת את הזמן, <strong>אלא אם המשתמש גורר כרגע</strong> (<code>isSliderDown</code>), כדי שהסמן לא "יקפוץ" לו מתחת ליד.</li>
+<li><code>sliderMoved</code> ← <code>on_slider_moved</code>: בזמן גרירה מציגה את זמן היעד.</li>
+<li><code>sliderReleased</code> ← <code>setPosition</code>: הקפיצה בפועל מתבצעת בשחרור.</li>
+<li><strong><code>SeekSlider</code>:</strong> <code>QSlider</code> רגיל זז בלחיצה על הציר רק בצעד קבוע. המחלקה דורסת את <code>mousePressEvent</code>, מחשבת את הערך שמתאים לנקודת הלחיצה (<code>QStyle.sliderValueFromPosition</code>) וקופצת אליו מיד, ואז ממשיכה כרגיל, כך שאפשר להמשיך ולגרור.</li>
+</ul>
+<h3 id="57-המחלקה-mainwindowqmainwindow">5.7 המחלקה <code>MainWindow(QMainWindow)</code></h3>
+<p>החלון הראשי. מחזיקה את ההגדרות (<code>self.cfg</code>), את הקובץ הנוכחי (<code>self.file_path</code>), את ה-worker הפעיל (<code>self.worker</code>), את הכתוביות ושפת המקור (<code>self.segments</code>, <code>self.source_lang</code>), ואת התרגום (<code>self.trans_segments</code>, <code>self.trans_lang</code>).</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -458,7 +557,7 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <tr>
 <td>בנייה</td>
 <td><code>__init__</code></td>
-<td>בניית הממשק: סרגל עליון, אזור גרירה, תיבת טקסט, סרגל תחתון</td>
+<td>בניית הממשק: סרגל עליון, אזור גרירה, נגן אודיו, תיבת טקסט, סרגל תחתון</td>
 </tr>
 <tr>
 <td>הגדרות</td>
@@ -473,26 +572,36 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <tr>
 <td>טעינה</td>
 <td><code>browse</code>, <code>load_file</code>, <code>dragEnterEvent</code>, <code>dropEvent</code></td>
-<td>בדיקת סיומת, עדכון אזור הגרירה, איפוס כתוביות ישנות</td>
+<td>בדיקת סיומת, עדכון אזור הגרירה, איפוס כתוביות ישנות, טעינת הקובץ לנגן</td>
 </tr>
 <tr>
 <td>המרה</td>
-<td><code>convert</code>, <code>_finish</code>, <code>on_done</code>, <code>on_error</code></td>
-<td>הפעלת ה-worker וטיפול בתוצאה. <code>self.worker</code> משמש גם כ"נעילה" שמונעת המרה כפולה</td>
+<td><code>convert</code>, <code>_start</code>, <code>_finish</code>, <code>on_done</code>, <code>on_error</code></td>
+<td>הפעלת ה-worker וטיפול בתוצאה. <code>self.worker</code> משמש גם כ"נעילה": בזמן פעולה אחת אי אפשר להתחיל תמלול או תרגום נוסף</td>
+</tr>
+<tr>
+<td>תרגום</td>
+<td><code>translate</code>, <code>on_translated</code>, <code>refresh_targets</code>, <code>reset_translation</code>, <code>on_target_changed</code></td>
+<td>הפעלת <code>TranslateWorker</code>, מילוי לשונית התרגום, ורשימת שפות היעד (כל השפות חוץ משפת המקור)</td>
+</tr>
+<tr>
+<td>לשוניות</td>
+<td><code>current_output</code>, <code>update_output_buttons</code></td>
+<td>מחזירה את התיבה, הכתוביות והשפה של הלשונית הפתוחה. כל פעולות הפלט עובדות דרכה</td>
 </tr>
 <tr>
 <td>עלות</td>
-<td><code>prices_for</code>, <code>format_usage</code>, <code>update_total_label</code>, <code>reset_totals</code></td>
+<td><code>record_usage</code>, <code>prices_for</code>, <code>format_usage</code>, <code>update_total_label</code>, <code>reset_totals</code></td>
 <td>חישוב ותצוגה של טוקנים ועלות</td>
 </tr>
 <tr>
 <td>פלט</td>
-<td><code>copy_all</code>, <code>save_text</code>, <code>save_srt</code>, <code>clear_output</code>, <code>set_segments</code></td>
-<td>העתקה, שמירה וניקוי</td>
+<td><code>copy_all</code>, <code>save_text</code>, <code>save_srt</code>, <code>default_save_path</code>, <code>clear_output</code>, <code>set_segments</code>, <code>on_rtl_toggled</code></td>
+<td>העתקה, שמירה וניקוי של הלשונית הפתוחה. בתרגום שם הקובץ כולל את קוד השפה (<code>.en.srt</code>)</td>
 </tr>
 </tbody>
 </table></div>
-<h3 id="56-main">5.6 <code>main()</code></h3>
+<h3 id="58-main">5.8 <code>main()</code></h3>
 <p>יוצרת <code>QApplication</code>, מגדירה כיוון RTL לכל האפליקציה (<code>Qt.RightToLeft</code>) וגופן Segoe UI, ומציגה את החלון.</p>
 <hr />
 <h2 id="6-תרשימי-זרימה">6. תרשימי זרימה</h2>
@@ -580,6 +689,24 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
     G --&gt; K[&quot;totals += tokens, usd, runs&lt;br/&gt;save_config&quot;]
     K --&gt; L[&quot;⁧תווית: סה״כ⁩&quot;]
 </pre></div>
+<h3 id="65-תרגום">6.5 תרגום</h3>
+<div class="diagram"><pre class="mermaid">flowchart TD
+    A([&quot;⁧לחיצה על 🌐 תרגם⁩&quot;]) --&gt; B{&quot;⁧יש כתוביות?⁩&quot;}
+    B -- &quot;⁧כן⁩&quot; --&gt; C[&quot;⁧מספור הכתוביות⁩&lt;br/&gt;⁧ופיצול למנות של 100⁩&quot;]
+    C --&gt; D[&quot;⁧שליחת מנה כ-JSON⁩&lt;br/&gt;[id, text]&quot;]
+    D --&gt; E{&quot;⁧חזרו כל המספרים?⁩&quot;}
+    E -- &quot;⁧לא⁩&quot; --&gt; F[&quot;⁧שליחה חוזרת של החסרים – פעם אחת⁩&quot;] --&gt; G
+    E -- &quot;⁧כן⁩&quot; --&gt; G{&quot;⁧עוד מנות?⁩&quot;}
+    G -- &quot;⁧כן⁩&quot; --&gt; D
+    G -- &quot;⁧לא⁩&quot; --&gt; H[&quot;⁧הרכבה: זמנים מהמקור + טקסט מתורגם⁩&lt;br/&gt;⁧חסר ← נשאר בשפת המקור⁩&quot;]
+    H --&gt; I{&quot;⁧הטקסט בתיבה נערך?⁩&quot;}
+    B -- &quot;⁧לא⁩&quot; --&gt; J
+    I -- &quot;⁧כן⁩&quot; --&gt; J[&quot;⁧קריאת תרגום נפרדת לטקסט⁩&quot;]
+    I -- &quot;⁧לא⁩&quot; --&gt; K[&quot;⁧הטקסט = הכתוביות המתורגמות⁩&quot;]
+    J --&gt; L[&quot;⁧לשונית תרגום⁩&lt;br/&gt;⁧עדכון טוקנים ועלות⁩&quot;]
+    K --&gt; L
+    L --&gt; M[&quot;⁧שמירה⁩&lt;br/&gt;name.en.txt / name.en.srt&quot;]
+</pre></div>
 <hr />
 <h2 id="7-החלטות-תכנון">7. החלטות תכנון</h2>
 <h3 id="71-שם-קובץ-בעברית">7.1 שם קובץ בעברית</h3>
@@ -599,6 +726,13 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <h3 id="78-מחיקת-הקובץ-מהשרת">7.8 מחיקת הקובץ מהשרת</h3>
 <p>הקובץ שהועלה ל-Files API נמחק מיד בתום ההמרה, בבלוק <code>finally</code>, גם אם הייתה שגיאה. כך האודיו לא נשאר בשרתי גוגל לאחר הצורך.</p>
 <hr />
+<h3 id="79-תרגום-של-התמלול-לא-של-האודיו">7.9 תרגום של התמלול, לא של האודיו</h3>
+<p>התרגום נעשה על הטקסט שכבר תומלל, ולא בהאזנה חדשה לאודיו. זה זול ומהיר יותר (רק טוקני טקסט), התוצאה תואמת בדיוק לתמלול שרואים, וב-SRT התזמון נשמר כמו שהוא. הכתוביות נשלחות ממוספרות כ-JSON, כדי לוודא שכל כתובית חזרה ולהתאים כל תרגום לזמנים שלו.</p>
+<p><strong>הנחיה מפורשת "לתרגם הכול":</strong> בלי זה המודל משמיט תוכן שהוא מפרש כרעש. לדוגמה, <code>1 2 3 שלום עולם.</code> תורגם ל-<code>Hello world.</code> בלבד (שוחזר 3 מתוך 3 עם <code>gemini-2.5-flash</code>). ההנחיה דורשת עכשיו לשמור כל מספר, ספירה, שם ומילת מילוי. אחרי השינוי מספרים, ספירה ומילות מילוי נשמרו בכל הבדיקות, באנגלית וברומנית.</p>
+<h3 id="710-סימני-כיוון-ב-srt">7.10 סימני כיוון ב-SRT</h3>
+<p>נגנים רבים מציגים כתוביות בכיוון בסיס משמאל לימין, ולכן בעברית הנקודה וסימן השאלה מופיעים בצד הלא נכון, ובשורה מעורבת סדר המילים מתבלבל. <code>rtl_line</code> עוטפת כל שורה ב-RLM (<code>U+200F</code>) משני הצדדים וב-RLE…PDF (<code>U+202B</code>…<code>U+202C</code>) סביב הטקסט. זה נבדק במדידת מיקום התווים בשני מנועי טקסט שמוגדרים משמאל לימין (Qt ו-Chromium): בלי הסימנים הנקודה וסדר המילים שגויים, ועם הסימנים שניהם נכונים. נגנים שונים מממשים כיוון טקסט אחרת, ולכן אפשר לכבות את זה (תיבת "RTL לנגנים").</p>
+<h3 id="711-מכסת-בקשות-לדקה">7.11 מכסת בקשות לדקה</h3>
+<p>במסלול החינמי של Gemini יש מגבלה של 5 בקשות לדקה למודל. תרגום כתוביות של קובץ ארוך שולח כמה בקשות ברצף, ולכן <code>call_with_quota_retry</code> מטפלת בשגיאת 429: היא ממתינה את הזמן שגוגל מבקש ("retry in Xs", עד 90 שניות), מציגה הודעה בשורת הסטטוס ומנסה שוב, עד 4 ניסיונות. כשנגמרת מכסה <strong>יומית</strong> אין טעם לחכות, ולכן השגיאה מוצגת מיד.</p>
 <h2 id="8-פתרון-תקלות">8. פתרון תקלות</h2>
 <div class="table-wrap"><table>
 <thead>
@@ -625,9 +759,34 @@ pre.mermaid { direction: ltr; background: none; padding: 0; margin: 0; text-alig
 <td>להזין מחדש דרך ⚙ מפתח API</td>
 </tr>
 <tr>
+<td>"הגעת למכסת הבקשות לדקה – ממתין X שניות"</td>
+<td>חריגה ממגבלת הבקשות לדקה (במסלול החינמי: 5 לדקה)</td>
+<td>לא צריך לעשות כלום: האפליקציה ממתינה וממשיכה לבד</td>
+</tr>
+<tr>
+<td><code>429 RESOURCE_EXHAUSTED ... PerDay</code></td>
+<td>נגמרה המכסה היומית (במסלול החינמי: 20 בקשות ביום)</td>
+<td>לבדוק מתי היא מתאפסת ב-💳 חיוב ← מעקב אחר ניצול המכסה. אפשר לחכות, או לחבר חשבון חיוב</td>
+</tr>
+<tr>
+<td>התרגום השמיט מספרים או מילים</td>
+<td>גרסה ישנה של ההנחיה</td>
+<td>עדכון לגרסה הנוכחית (ההנחיה דורשת לתרגם הכול)</td>
+</tr>
+<tr>
 <td><code>לא התקבל טקסט מהמודל</code></td>
 <td>המודל החזיר תשובה ריקה (קובץ שקט, חסימת תוכן)</td>
 <td>לבדוק את הקובץ ולנסות שוב</td>
+</tr>
+<tr>
+<td><code>⚠ X כתוביות זהות למקור (ייתכן שלא תורגמו)</code></td>
+<td>המודל לא החזיר תרגום לחלק מהכתוביות גם בניסיון החוזר, או שהכתובית זהה בשתי השפות (למשל שם)</td>
+<td>לתרגם שוב. מה שנשאר מופיע בשפת המקור</td>
+</tr>
+<tr>
+<td>כתוביות בעברית מוצגות בנגן עם סימני ריבוע או רווחים מוזרים</td>
+<td>הנגן לא תומך בסימני הכיוון</td>
+<td>לבטל את "RTL לנגנים" ולשמור שוב</td>
 </tr>
 <tr>
 <td><code>לא ניתן היה לפענח כתוביות</code></td>
