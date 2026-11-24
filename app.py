@@ -85,10 +85,30 @@ DEFAULT_SEG_SECONDS = 2.0
 
 # "Translate everything" matters: without it the model drops content it judges to be noise,
 # e.g. "1 2 3 שלום עולם." came back as just "Hello world." (reproduced 3/3 with gemini-2.5-flash).
+_TRANSLATE_TAIL = (
+    " If the source has garbled stuttering or the same character repeated many times, do not "
+    "reproduce it—translate the meaningful speech once, at most a natural short filler."
+)
+_TRANSLATE_PARAS = (
+    " Format for reading: separate paragraphs with a blank line (double newline). Keep every "
+    "paragraph short (about {sentences} sentences). Preserve the source's paragraph breaks; "
+    "add new breaks where the topic shifts or after a question."
+)
 TRANSLATE_PROMPT = (
     "Translate the following {src} transcript into {tgt}. Translate everything that is in it: "
     "keep every number, count, name and repeated or filler word. Never omit, summarize or "
-    "'clean up' anything. Keep paragraph breaks. Return only the translation, without commentary."
+    "'clean up' anything."
+    + _TRANSLATE_PARAS
+    + " Return only the translation, without commentary."
+    + _TRANSLATE_TAIL
+)
+TRANSLATE_CHUNK_PROMPT = (
+    "Translate this part ({part}/{total}) of a longer {src} transcript into {tgt}. "
+    "Translate everything in this part: keep every number, count, name and repeated or filler "
+    "word. Never omit, summarize or 'clean up' anything."
+    + _TRANSLATE_PARAS
+    + " Return only the translation, without commentary."
+    + _TRANSLATE_TAIL
 )
 TRANSLATE_SRT_PROMPT = (
     "Translate these subtitles from {src} into {tgt}. The input is a JSON array of objects "
@@ -96,6 +116,7 @@ TRANSLATE_SRT_PROMPT = (
     "translated text. Translate everything in each subtitle: keep every number, count, name "
     "and repeated or filler word, and never omit, summarize or 'clean up' anything. Use the "
     "neighbouring subtitles as context, and never merge, split, skip or reorder items."
+    + _TRANSLATE_TAIL
 )
 TRANSLATE_SRT_SCHEMA = {
     "type": "ARRAY",
@@ -106,6 +127,182 @@ TRANSLATE_SRT_SCHEMA = {
     },
 }
 SRT_TRANSLATE_BATCH = 100  # subtitles per request, so long files don't hit the output limit
+TEXT_TRANSLATE_MAX = 3500  # characters per translation request (long transcripts)
+STUTTER_MIN_RUN = 4  # same character this many times in a row -> collapse (STT hallucination)
+STUTTER_KEEP = 2
+DEFAULT_TRANSLATE_PARA_SENTENCES = 3
+TRANSLATE_PARA_MIN_CHARS = 220  # only split dense blocks longer than this
+SUBTITLE_PARA_LINES = 4  # max subtitle lines merged into one paragraph
+SUBTITLE_PARA_GAP = 2.0  # seconds of silence -> new paragraph
+
+_SENT_BOUNDARY = re.compile(r'(?<=[.!?؟…])\s+(?=[\u0590-\u05FFA-Za-zÀ-ÖØ-öø-ÿ0-9"(])')
+
+
+def collapse_stutter(text, min_run=STUTTER_MIN_RUN, keep=STUTTER_KEEP):
+    """Collapse long runs of one character (e.g. thousands of מ from a bad STT segment)."""
+    return re.sub(r"(.)\1{" + str(min_run - 1) + r",}", r"\1" * keep, text)
+
+
+def strip_trailing_stutter_lines(text):
+    """Drop tail lines that are almost only one repeated character (model hallucination)."""
+    lines = text.splitlines()
+    while lines:
+        line = lines[-1].strip()
+        if not line:
+            lines.pop()
+            continue
+        letters = [c for c in line if c.isalpha() or ("\u0590" <= c <= "\u05FF")]
+        if len(letters) >= 8 and letters:
+            top = max(letters.count(c) for c in set(letters))
+            if top / len(letters) >= 0.85:
+                lines.pop()
+                continue
+        break
+    return "\n".join(lines)
+
+
+def sanitize_transcript(text):
+    """Clean common STT glitches before display, save or translation."""
+    cleaned = collapse_stutter(text)
+    removed = len(text) - len(cleaned)
+    return cleaned, removed
+
+
+def finalize_translation_text(text):
+    """Sanitize model translation output (repetition in reply or at end of text)."""
+    text = strip_trailing_stutter_lines(text)
+    return sanitize_transcript(text)
+
+
+def improve_paragraph_breaks(text, max_sentences=DEFAULT_TRANSLATE_PARA_SENTENCES,
+                             min_chars=TRANSLATE_PARA_MIN_CHARS):
+    """Split long dense blocks into shorter paragraphs for reading."""
+    text = re.sub(r"\n{3,}", "\n\n", text.strip())
+    blocks = text.split("\n\n")
+    out = []
+    for block in blocks:
+        block = " ".join(block.split())
+        if not block:
+            continue
+        if len(block) < min_chars:
+            out.append(block)
+            continue
+        sents = [s.strip() for s in _SENT_BOUNDARY.split(block) if s.strip()]
+        if len(sents) <= max_sentences:
+            out.append(block)
+            continue
+        for i in range(0, len(sents), max_sentences):
+            out.append(" ".join(sents[i:i + max_sentences]))
+    return "\n\n".join(out)
+
+
+def text_from_subtitle_lines(segments, max_lines=SUBTITLE_PARA_LINES, gap=SUBTITLE_PARA_GAP):
+    """Merge translated subtitle lines into paragraphs (pause or line count)."""
+    if not segments:
+        return ""
+    paras, buf = [], []
+    prev_end = None
+    for a, b, t in segments:
+        t = t.strip()
+        if not t:
+            continue
+        new_para = (
+            (prev_end is not None and (a - prev_end) >= gap)
+            or len(buf) >= max_lines
+        )
+        if new_para and buf:
+            paras.append(" ".join(buf))
+            buf = []
+        buf.append(t)
+        prev_end = b
+    if buf:
+        paras.append(" ".join(buf))
+    return "\n\n".join(paras)
+
+
+def polish_translation(text, max_sentences=DEFAULT_TRANSLATE_PARA_SENTENCES):
+    text, removed = finalize_translation_text(text)
+    text = improve_paragraph_breaks(text, max_sentences=max_sentences)
+    return text, removed
+
+
+def guess_text_language(text, min_letters=40):
+    """Best-effort script guess: he / en / None (Romanian is not distinguished from English)."""
+    he = latin = 0
+    for c in text:
+        if "\u0590" <= c <= "\u05FF":
+            he += 1
+        elif c.isascii() and c.isalpha():
+            latin += 1
+    total = he + latin
+    if total < min_letters:
+        return None
+    if he / total >= 0.55:
+        return "he"
+    if latin / total >= 0.55:
+        return "en"
+    return None
+
+
+def sanitize_segments(segments):
+    out, removed = [], 0
+    for a, b, t in segments:
+        c, r = sanitize_transcript(t)
+        removed += r
+        out.append((a, b, c))
+    return out, removed
+
+
+def text_translation_chunks(text, max_len=TEXT_TRANSLATE_MAX):
+    """Split on paragraphs; oversized paragraphs split on sentence boundaries."""
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    buf = ""
+
+    def flush():
+        nonlocal buf
+        if buf.strip():
+            chunks.append(buf.strip())
+        buf = ""
+
+    def split_long(para):
+        parts = re.split(r"(?<=[.!?؟。])\s+", para)
+        sub = ""
+        for part in parts:
+            if not part:
+                continue
+            if len(part) > max_len:
+                if sub:
+                    chunks.append(sub.strip())
+                    sub = ""
+                for i in range(0, len(part), max_len):
+                    chunks.append(part[i:i + max_len].strip())
+                continue
+            if sub and len(sub) + len(part) + 1 > max_len:
+                chunks.append(sub.strip())
+                sub = part
+            else:
+                sub = (sub + " " + part).strip() if sub else part
+        if sub:
+            chunks.append(sub.strip())
+
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) > max_len:
+            flush()
+            split_long(para)
+            continue
+        if buf and len(buf) + len(para) + 2 > max_len:
+            flush()
+        buf = (buf + "\n\n" + para).strip() if buf else para
+    flush()
+    return chunks or [text]
 
 # Gemini timestamps run late; subtitles start this much earlier when saving (adjustable in the UI).
 DEFAULT_LEAD_IN_MS = 200
@@ -270,6 +467,32 @@ def rtl_line(text):
     return f"‏‫{text}‬‏"
 
 
+TEXT_EXTS = {".txt", ".srt"}
+
+
+def parse_srt_file(raw):
+    """SubRip file content -> [(start_sec, end_sec, text), ...]."""
+    raw = raw.lstrip("\ufeff")
+    segs = []
+    for block in re.split(r"\n\s*\n", raw.strip()):
+        lines = [ln.rstrip() for ln in block.strip().splitlines() if ln.strip()]
+        if len(lines) < 2:
+            continue
+        idx = 0
+        if re.fullmatch(r"\d+", lines[0].strip()):
+            idx = 1
+        if idx >= len(lines) or "-->" not in lines[idx]:
+            continue
+        start_s, end_s = lines[idx].split("-->", 1)
+        start = parse_timestamp(start_s.strip())
+        end = parse_timestamp(end_s.strip())
+        text = "\n".join(lines[idx + 1:]).strip()
+        if start is None or end is None or not text:
+            continue
+        segs.append((start, end, text))
+    return segs
+
+
 def segments_to_srt(segments, lead_in=0.0, rtl=False):
     if lead_in:
         segments = apply_lead_in(segments, lead_in)
@@ -379,7 +602,10 @@ class TranscribeWorker(QThread):
                 segments = parse_segments(text, self.duration)
                 if not segments:
                     raise RuntimeError("לא ניתן היה לפענח כתוביות מתשובת המודל.")
+                segments, _ = sanitize_segments(segments)
                 text = "\n".join(s[2] for s in segments)
+            else:
+                text, _ = sanitize_transcript(text)
             self.finished_ok.emit(text, extract_usage(resp), segments)
         except Exception as e:
             self.failed.emit(str(e))
@@ -392,11 +618,12 @@ class TranslateWorker(QThread):
     failed = Signal(str)
     progress = Signal(str)
 
-    def __init__(self, key, model, src, tgt, text, segments):
+    def __init__(self, key, model, src, tgt, text, segments, para_sentences=DEFAULT_TRANSLATE_PARA_SENTENCES):
         super().__init__()
         self.key, self.model = key, model
         self.src, self.tgt = LANGUAGES[src][1], LANGUAGES[tgt][1]
         self.text, self.segments = text, segments
+        self.para_sentences = para_sentences
 
     def _config(self, types, json_schema=None):
         cfg = types.GenerateContentConfig(temperature=0, max_output_tokens=65536)
@@ -420,11 +647,46 @@ class TranslateWorker(QThread):
             add_usage(usage, extract_usage(resp))
             got = parse_translations(resp.text or "")
             wanted = {i for i, _ in todo}
-            result.update({i: t for i, t in got.items() if i in wanted})
+            for i, t in got.items():
+                if i in wanted:
+                    result[i], _ = polish_translation(t, self.para_sentences)
             todo = [(i, t) for i, t in todo if i not in result]
             if not todo:
                 break
         return result
+
+    def _para_kw(self):
+        return {"src": self.src, "tgt": self.tgt, "sentences": self.para_sentences}
+
+    def _translate_text(self, client, types, usage):
+        body, _ = sanitize_transcript(self.text)
+        chunks = text_translation_chunks(body)
+        if len(chunks) == 1:
+            prompt = TRANSLATE_PROMPT.format(**self._para_kw())
+            resp = call_with_quota_retry(lambda: client.models.generate_content(
+                model=self.model, contents=[prompt, chunks[0]],
+                config=self._config(types)), self.progress.emit)
+            add_usage(usage, extract_usage(resp))
+            text, _ = polish_translation((resp.text or "").strip(), self.para_sentences)
+        else:
+            parts = []
+            for n, chunk in enumerate(chunks, 1):
+                self.progress.emit(f"מתרגם טקסט... (חלק {n} מתוך {len(chunks)})")
+                prompt = TRANSLATE_CHUNK_PROMPT.format(
+                    part=n, total=len(chunks), **self._para_kw())
+                resp = call_with_quota_retry(lambda c=chunk, p=prompt: client.models.generate_content(
+                    model=self.model, contents=[p, c],
+                    config=self._config(types)), self.progress.emit)
+                add_usage(usage, extract_usage(resp))
+                piece, _ = polish_translation((resp.text or "").strip(), self.para_sentences)
+                if not piece:
+                    raise RuntimeError(f"לא התקבל תרגום לחלק {n}/{len(chunks)}.")
+                parts.append(piece)
+            text = "\n\n".join(parts)
+            text, _ = polish_translation(text, self.para_sentences)
+        if not text:
+            raise RuntimeError("לא התקבל תרגום מהמודל.")
+        return text
 
     def run(self):
         try:
@@ -433,6 +695,8 @@ class TranslateWorker(QThread):
 
             client = genai.Client(api_key=self.key)
             usage = {}
+            self.segments, _ = sanitize_segments(self.segments)
+            self.text, _ = sanitize_transcript(self.text)
             new_segments = []
             if self.segments:
                 items = [(i, seg[2]) for i, seg in enumerate(self.segments, 1)]
@@ -448,17 +712,13 @@ class TranslateWorker(QThread):
             source_text = "\n".join(s[2] for s in self.segments)
             if self.segments and self.text.strip() == source_text.strip():
                 # transcript wasn't edited: the subtitle translation already is the text translation
-                text = "\n".join(s[2] for s in new_segments)
+                text = text_from_subtitle_lines(new_segments)
             else:
                 self.progress.emit("מתרגם טקסט...")
-                resp = call_with_quota_retry(lambda: client.models.generate_content(
-                    model=self.model,
-                    contents=[TRANSLATE_PROMPT.format(src=self.src, tgt=self.tgt), self.text],
-                    config=self._config(types)), self.progress.emit)
-                add_usage(usage, extract_usage(resp))
-                text = (resp.text or "").strip()
-                if not text:
-                    raise RuntimeError("לא התקבל תרגום מהמודל.")
+                text = self._translate_text(client, types, usage)
+            text, _ = polish_translation(text, self.para_sentences)
+            new_segments = [(a, b, polish_translation(t, self.para_sentences)[0])
+                            for a, b, t in new_segments]
             self.finished_ok.emit(text, usage, new_segments)
         except Exception as e:
             self.failed.emit(str(e))
@@ -469,7 +729,9 @@ class DropLabel(QLabel):
     clicked = Signal()
 
     def __init__(self):
-        super().__init__("גרור לכאן קובץ MP3\nאו לחץ כאן לבחירת קובץ")
+        super().__init__(
+            "גרור לכאן קובץ אודיו, טקסט (.txt) או כתוביות (.srt)\n"
+            "או לחץ לבחירת קובץ אודיו")
         self.setObjectName("drop")
         self.setAlignment(Qt.AlignCenter)
         self.setMinimumHeight(90)
@@ -604,6 +866,8 @@ class MainWindow(QMainWindow):
         self.pending_lang = None  # language of the transcription in progress
         self.trans_lang = None  # language of the current translation
         self.trans_segments = []  # translated subtitles, same timestamps as self.segments
+        self.source_file_path = None  # last loaded .txt/.srt (save defaults)
+        self._block_source_sync = False
 
         self.setWindowTitle("Mp3toText – המרת אודיו לטקסט")
         self.resize(1060, 680)
@@ -626,7 +890,8 @@ class MainWindow(QMainWindow):
         self.srt_check.setChecked(bool(self.cfg.get("srt", False)))
         self.srt_check.toggled.connect(self.on_srt_toggled)
         self.lang_combo = QComboBox()
-        self.lang_combo.setToolTip("שפת הדיבור באודיו")
+        self.lang_combo.setToolTip(
+            "שפת המקור: הדיבור בקובץ האודיו, או השפה של טקסט שהודבק / נטען לטאב מקור")
         for code, (label, _name) in LANGUAGES.items():
             self.lang_combo.addItem(label, code)
         saved = self.lang_combo.findData(self.cfg.get("lang", DEFAULT_LANG))
@@ -668,7 +933,7 @@ class MainWindow(QMainWindow):
 
         # --- drop zone ---
         self.drop = DropLabel()
-        self.drop.file_dropped.connect(self.load_file)
+        self.drop.file_dropped.connect(self.ingest_path)
         self.drop.clicked.connect(self.browse)
         root.addWidget(self.drop)
 
@@ -680,7 +945,9 @@ class MainWindow(QMainWindow):
         self.text = QTextEdit()
         self.text.setAcceptRichText(False)
         self.text.setFont(QFont("Segoe UI", 12))
-        self.text.setPlaceholderText("כאן יופיע התמלול")
+        self.text.setPlaceholderText(
+            "כאן יופיע התמלול — או הדבק / טען טקסט ובחר שפה למעלה לתרגום")
+        self.text.textChanged.connect(self.on_source_text_changed)
         self.trans_text = QTextEdit()
         self.trans_text.setAcceptRichText(False)
         self.trans_text.setFont(QFont("Segoe UI", 12))
@@ -700,12 +967,22 @@ class MainWindow(QMainWindow):
         self.target_combo.currentIndexChanged.connect(self.on_target_changed)
         self.translate_btn = QPushButton("🌐 תרגם")
         self.translate_btn.setToolTip(
-            "מתרגם את התמלול (וגם את הכתוביות, אם נוצרו) לשפה שנבחרה.\n"
-            "נשלח רק טקסט, בלי האודיו, ולכן זה מהיר וזול. התזמון של הכתוביות נשמר.")
+            "מתרגם את הטקסט בטאב מקור (מתמלול, הדבקה או קובץ) לשפה שנבחרה.\n"
+            "אם יש כתוביות — מתרגם גם אותן ושומר את התזמון. נשלח רק טקסט, בלי האודיו.")
         self.translate_btn.setEnabled(False)
         self.translate_btn.clicked.connect(self.translate)
         corner_row.addWidget(QLabel("תרגם ל:"))
         corner_row.addWidget(self.target_combo)
+        self.para_spin = QSpinBox()
+        self.para_spin.setRange(2, 12)
+        para_val = int(self.cfg.get("translate_para_sentences", DEFAULT_TRANSLATE_PARA_SENTENCES))
+        self.para_spin.setValue(max(2, min(12, para_val)))
+        self.para_spin.setToolTip("כמה משפטים בערך בכל פסקה בתרגום (2–12)")
+        self.para_spin.setPrefix("פסקה: ")
+        self.para_spin.setSuffix(" מש")
+        self.para_spin.setFixedWidth(132)
+        self.para_spin.valueChanged.connect(self.on_para_changed)
+        corner_row.addWidget(self.para_spin)
         corner_row.addWidget(self.translate_btn)
         self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
         # by default the corner is squeezed below the button's natural height, clipping its bottom edge
@@ -716,6 +993,9 @@ class MainWindow(QMainWindow):
         bottom = QHBoxLayout()
         copy_btn = QPushButton("📋 העתק הכל")
         copy_btn.clicked.connect(self.copy_all)
+        load_text_btn = QPushButton("📂 טען טקסט")
+        load_text_btn.setToolTip("טעינת קובץ .txt או .srt לטאב מקור (בלי אודיו) לצורך תרגום")
+        load_text_btn.clicked.connect(self.browse_text)
         save_btn = QPushButton("💾 שמור כקובץ")
         save_btn.clicked.connect(self.save_text)
         lead_label = QLabel("הקדמה:")
@@ -748,6 +1028,7 @@ class MainWindow(QMainWindow):
         self.progress.setFixedWidth(120)
         self.progress.hide()
         bottom.addWidget(copy_btn)
+        bottom.addWidget(load_text_btn)
         bottom.addWidget(save_btn)
         bottom.addWidget(lead_label)
         bottom.addWidget(self.lead_spin)
@@ -783,6 +1064,10 @@ class MainWindow(QMainWindow):
     def on_lang_changed(self, _index):
         self.cfg["lang"] = self.lang_combo.currentData()
         save_config(self.cfg)
+        if not self.worker and self.text.toPlainText().strip():
+            self.source_lang = self.lang_combo.currentData()
+            self.tabs.setTabText(0, f"מקור ({LANGUAGES[self.source_lang][0]})")
+            self.refresh_targets()
 
     def on_lead_changed(self, value):
         self.cfg["srt_lead_in_ms"] = value
@@ -796,6 +1081,10 @@ class MainWindow(QMainWindow):
         if self.target_combo.currentData():
             self.cfg["translate_to"] = self.target_combo.currentData()
             save_config(self.cfg)
+
+    def on_para_changed(self, value):
+        self.cfg["translate_para_sentences"] = value
+        save_config(self.cfg)
 
     def set_segments(self, segments):
         self.segments = segments
@@ -820,7 +1109,42 @@ class MainWindow(QMainWindow):
         idx = self.target_combo.findData(self.cfg.get("translate_to"))
         self.target_combo.setCurrentIndex(max(idx, 0))
         self.target_combo.blockSignals(False)
-        self.translate_btn.setEnabled(bool(self.source_lang) and not self.worker)
+        has_src = bool(self.source_lang and self.text.toPlainText().strip())
+        self.translate_btn.setEnabled(has_src and not self.worker)
+
+    def apply_source_lang(self):
+        """Mark source language from the combo when there is text in the source tab."""
+        if self.worker:
+            return
+        if self.text.toPlainText().strip():
+            self.source_lang = self.lang_combo.currentData()
+            self.tabs.setTabText(0, f"מקור ({LANGUAGES[self.source_lang][0]})")
+        else:
+            self.source_lang = None
+            self.tabs.setTabText(0, "מקור")
+        self.refresh_targets()
+
+    def on_source_text_changed(self):
+        if self._block_source_sync:
+            return
+        self.apply_source_lang()
+
+    def _set_source_text(self, text, segments=None):
+        text, tr_removed = sanitize_transcript(text)
+        segments = list(segments or [])
+        if segments:
+            segments, seg_removed = sanitize_segments(segments)
+            tr_removed += seg_removed
+        self._block_source_sync = True
+        try:
+            self.text.setPlainText(text)
+            self.set_segments(segments)
+            self.reset_translation()
+            self.apply_source_lang()
+            if tr_removed > 50:
+                self.set_status("הוסר רעש תמלול (תווים חוזרים) — מומלץ לתרגם שוב")
+        finally:
+            self._block_source_sync = False
 
     def reset_translation(self):
         self.trans_text.clear()
@@ -832,9 +1156,17 @@ class MainWindow(QMainWindow):
         self.update_output_buttons()
 
     def clear_output(self):
-        self.text.clear()
-        self.set_segments([])
-        self.reset_translation()
+        self.source_file_path = None
+        self._block_source_sync = True
+        try:
+            self.text.clear()
+            self.set_segments([])
+            self.reset_translation()
+            self.source_lang = None
+            self.tabs.setTabText(0, "מקור")
+            self.refresh_targets()
+        finally:
+            self._block_source_sync = False
 
     def get_api_key(self):
         return clean_key(self.cfg.get("api_key") or os.environ.get("GEMINI_API_KEY", ""))
@@ -871,9 +1203,20 @@ class MainWindow(QMainWindow):
     def dropEvent(self, e):
         urls = e.mimeData().urls()
         if urls:
-            self.load_file(urls[0].toLocalFile())
+            self.ingest_path(urls[0].toLocalFile())
 
     # ---------- file loading ----------
+    def ingest_path(self, path):
+        ext = Path(path).suffix.lower()
+        if ext in TEXT_EXTS:
+            self.load_text_file(path)
+        elif ext in AUDIO_EXTS:
+            self.load_file(path)
+        else:
+            QMessageBox.warning(self, "קובץ לא נתמך",
+                                f"סוג הקובץ {ext} אינו נתמך.\n"
+                                "אודיו, .txt או .srt בלבד.")
+
     def browse(self):
         if self.worker:
             return
@@ -881,7 +1224,42 @@ class MainWindow(QMainWindow):
             self, "בחר קובץ אודיו", "",
             "קבצי אודיו (*.mp3 *.wav *.m4a *.ogg *.flac *.aac);;כל הקבצים (*.*)")
         if path:
-            self.load_file(path)
+            self.ingest_path(path)
+
+    def browse_text(self):
+        if self.worker:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "טעינת טקסט", "",
+            "טקסט וכתוביות (*.txt *.srt);;Text (*.txt);;SubRip (*.srt)")
+        if path:
+            self.load_text_file(path)
+
+    def load_text_file(self, path):
+        if self.worker:
+            return
+        p = Path(path)
+        try:
+            raw = p.read_text(encoding="utf-8-sig")
+        except OSError as e:
+            QMessageBox.critical(self, "שגיאה", f"לא ניתן לקרוא את הקובץ:\n{e}")
+            return
+        if p.suffix.lower() == ".srt":
+            segments = parse_srt_file(raw)
+            if not segments:
+                QMessageBox.warning(self, "קובץ ריק", "לא נמצאו כתוביות בקובץ.")
+                return
+            text = "\n".join(s[2] for s in segments)
+        else:
+            text = raw.strip()
+            segments = []
+            if not text:
+                QMessageBox.warning(self, "קובץ ריק", "הקובץ ריק.")
+                return
+        self.source_file_path = p
+        self._set_source_text(text, segments)
+        extra = f", {len(segments)} כתוביות" if segments else ""
+        self.set_status(f"נטען: {p.name} ({len(text.split())} מילים{extra}) — בחר 'תרגם ל' ולחץ תרגם")
 
     def load_file(self, path):
         if self.worker:
@@ -892,11 +1270,17 @@ class MainWindow(QMainWindow):
                                 f"סוג הקובץ {p.suffix} אינו נתמך.\nיש לבחור קובץ MP3.")
             return
         self.file_path = p
+        self.source_file_path = None
         self.set_segments([])  # old subtitles belong to the previous file
-        self.reset_translation()
-        self.source_lang = None
-        self.tabs.setTabText(0, "מקור")
-        self.refresh_targets()
+        self._block_source_sync = True
+        try:
+            self.text.clear()
+            self.reset_translation()
+            self.source_lang = None
+            self.tabs.setTabText(0, "מקור")
+            self.refresh_targets()
+        finally:
+            self._block_source_sync = False
         self.audio_player.load(p)
         size_mb = p.stat().st_size / (1024 * 1024)
         self.drop.setText(f"🎵 {p.name}\n({size_mb:.1f} MB) – גרור קובץ אחר להחלפה")
@@ -933,16 +1317,17 @@ class MainWindow(QMainWindow):
         self.convert_btn.setEnabled(bool(self.file_path))
         self.worker.deleteLater()
         self.worker = None
-        self.translate_btn.setEnabled(bool(self.source_lang))
+        self.refresh_targets()
 
     def on_done(self, text, usage, segments):
-        self.source_lang = self.pending_lang
+        self.source_file_path = self.file_path
+        idx = self.lang_combo.findData(self.pending_lang)
+        if idx >= 0:
+            self.lang_combo.blockSignals(True)
+            self.lang_combo.setCurrentIndex(idx)
+            self.lang_combo.blockSignals(False)
         self._finish()
-        self.text.setPlainText(text)
-        self.set_segments(segments)
-        self.reset_translation()
-        self.tabs.setTabText(0, f"מקור ({LANGUAGES[self.source_lang][0]})")
-        self.refresh_targets()
+        self._set_source_text(text, segments)
         extra = f", {len(segments)} כתוביות" if segments else ""
         self.set_status(f"הסתיים ✔ ({len(text.split())} מילים{extra})")
         self.record_usage(usage)
@@ -955,13 +1340,47 @@ class MainWindow(QMainWindow):
         if not text.strip():
             self.set_status("אין טקסט לתרגום")
             return
+        text, removed = sanitize_transcript(text)
+        if removed > 0:
+            self._block_source_sync = True
+            try:
+                self.text.setPlainText(text)
+                self.apply_source_lang()
+            finally:
+                self._block_source_sync = False
+            self.set_status("נוקה רעש מהמקור — ממשיך לתרגם...")
+        guess = guess_text_language(text)
+        if guess and guess != self.source_lang:
+            name = LANGUAGES[guess][0]
+            choice = QMessageBox.question(
+                self, "שפת מקור",
+                f"הטקסט נראה ב{name}, אבל שפת המקור היא {LANGUAGES[self.source_lang][0]}.\n"
+                f"לעדכן ל{name} ולהמשיך?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Yes)
+            if choice == QMessageBox.Cancel:
+                return
+            if choice == QMessageBox.Yes:
+                idx = self.lang_combo.findData(guess)
+                if idx >= 0:
+                    self.lang_combo.setCurrentIndex(idx)
+                self.source_lang = guess
+                self.tabs.setTabText(0, f"מקור ({name})")
+                self.refresh_targets()
+            elif choice == QMessageBox.No:
+                return
+        tgt = self.target_combo.currentData()
+        if tgt == self.source_lang:
+            QMessageBox.warning(self, "תרגום",
+                                "שפת המקור ושפת היעד זהות — בחר שפה אחרת ב'תרגם ל'.")
+            return
         if not self.get_api_key():
             self.ask_api_key()
             if not self.get_api_key():
                 return
-        tgt = self.target_combo.currentData()
-        self.worker = TranslateWorker(self.get_api_key(), self.cfg.get("model", DEFAULT_MODEL),
-                                      self.source_lang, tgt, text, list(self.segments))
+        self.worker = TranslateWorker(
+            self.get_api_key(), self.cfg.get("model", DEFAULT_MODEL),
+            self.source_lang, tgt, text, list(self.segments),
+            self.para_spin.value())
         self.worker.tgt_code = tgt
         self.worker.progress.connect(self.set_status)
         self.worker.finished_ok.connect(self.on_translated)
@@ -970,6 +1389,8 @@ class MainWindow(QMainWindow):
     def on_translated(self, text, usage, segments):
         self.trans_lang = self.worker.tgt_code
         self._finish()
+        text, out_removed = polish_translation(text, self.para_spin.value())
+        segments = [(a, b, polish_translation(t, self.para_spin.value())[0]) for a, b, t in segments]
         self.trans_text.setPlainText(text)
         self.trans_segments = segments
         self.tabs.setTabText(1, f"תרגום ({LANGUAGES[self.trans_lang][0]})")
@@ -979,7 +1400,8 @@ class MainWindow(QMainWindow):
         kept = sum(1 for (_, _, t), (_, _, o) in zip(segments, self.segments) if t == o)
         extra = f", {len(segments)} כתוביות" if segments else ""
         warn = f" ⚠ {kept} כתוביות זהות למקור (ייתכן שלא תורגמו)" if kept else ""
-        self.set_status(f"התרגום הסתיים ✔ ({len(text.split())} מילים{extra}){warn}")
+        noise = " · הוסר רעש מהפלט" if out_removed > 50 else ""
+        self.set_status(f"התרגום הסתיים ✔ ({len(text.split())} מילים{extra}){warn}{noise}")
         self.record_usage(usage)
 
     def record_usage(self, usage):
@@ -1041,10 +1463,11 @@ class MainWindow(QMainWindow):
     def default_save_path(self, ext, fallback):
         """Same folder and base name as the audio file; a translation adds its language
         code (lecture.en.srt), which players such as VLC recognise."""
-        if not self.file_path:
+        base = self.source_file_path or self.file_path
+        if not base:
             return fallback + ext
         lang_tag = f".{self.trans_lang}" if self.tabs.currentIndex() == 1 else ""
-        return str(self.file_path.with_name(self.file_path.stem + lang_tag + ext))
+        return str(base.with_name(base.stem + lang_tag + ext))
 
     def save_text(self):
         content = self.current_output()[0].toPlainText()
